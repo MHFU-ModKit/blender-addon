@@ -6,7 +6,7 @@ here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 stage="$(mktemp -d)/blender_mhfu"
 mkdir -p "$stage"
-cp "$here"/__init__.py "$here"/importer.py "$stage"/
+cp "$here"/__init__.py "$here"/importer.py "$here"/exporter.py "$stage"/
 cp -r "$repo"/tools/mhfu_model "$stage"/mhfu_model
 # drop tests + caches from the vendored copy
 rm -rf "$stage"/mhfu_model/tests "$stage"/mhfu_model/__pycache__

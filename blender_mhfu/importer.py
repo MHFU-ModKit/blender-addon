@@ -141,6 +141,9 @@ def import_pac(filepath, import_anims=True):
         raise RuntimeError("%s has no skeleton sub-resource (small monster?)" % name)
 
     arm_obj = _build_armature(mm.skeleton, name, coll)
+    # Stash the source path so the exporter can re-load it and apply only the
+    # edits read from the scene (untouched sub-resources stay byte-identical).
+    arm_obj["mhfu_source_pac"] = os.path.abspath(filepath)
     if mm.model:
         _build_meshes(mm.model, mm.skeleton, name, coll, arm_obj)
     n = _build_actions(mm.anim.animations if (import_anims and mm.anim) else [], arm_obj)
