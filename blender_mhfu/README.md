@@ -41,9 +41,11 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
 
 ## Known limitations
 
-- **Geometry edits not exported yet** — the exporter reloads source geometry
-  untouched (so it can never write invalid geometry); animation + skeleton bind-pose
-  edits are the supported write-back. Editable PMO GE emission is the Phase-3 stretch.
+- **Geometry edits = reshape only (same topology).** Moving mesh vertices is carried
+  through export (re-encoded in place into the existing vertex buffers); adding or
+  removing vertices/faces is rejected with a clear error (a GE-list rebuild — Phase 5).
+- **Object-level transforms aren't captured** — edit vertices in Edit Mode (the
+  exporter reads mesh-local vertex positions, not the object matrix).
 - **Textures deferred** — UVs are imported but TMH→image is a follow-up.
 - **Ease tangents** on keyframes aren't mapped to Blender handles yet (the engine
   uses a cubic `spline()` with ease-in/out; treated as plain keyframes for now).
@@ -56,5 +58,6 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
 Headless (`blender --background --python`): `file_06134` → 24-bone armature, 28 mesh
 objects (729 verts), 22 animations. **Import→export round-trip: unedited output is
 byte-identical to the source (149504 B); an edited f-curve re-decodes cleanly with
-the texture + skeleton subs byte-identical.** Library math/encoders/validator are
-unit-tested in `tools/mhfu_model/tests/`.
+the texture + skeleton subs byte-identical; a moved mesh vertex re-decodes to the
+moved position (+20 in → +20 out) with the texture intact.** Library
+math/encoders/validator are unit-tested in `tools/mhfu_model/tests/`.

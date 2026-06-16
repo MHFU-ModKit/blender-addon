@@ -122,6 +122,50 @@ def _apply_bindpose(arm_obj, mm):
     return edited
 
 
+_GRP_RE = re.compile(r"_grp(\d+)$")
+
+
+def _apply_meshes(arm_obj, mm):
+    """Write edited mesh-object vertex positions back into the model's groups.
+
+    Each imported mesh object is `<name>_grpNN` and parented to the armature; its
+    vertex order matches the group's. A vertex MOVE updates the group's position
+    (engine units, via conv_inv) and flags `model.edited`. A vertex-COUNT change is
+    a topology edit the encoder can't represent yet -> raise a clear error here."""
+    if not mm.model:
+        return 0
+    groups = {g.index: g for g in mm.model.mesh_groups}
+    edited = 0
+    for obj in arm_obj.children:
+        if obj.type != "MESH":
+            continue
+        m = _GRP_RE.search(obj.name)
+        if not m:
+            continue
+        gi = int(m.group(1))
+        g = groups.get(gi)
+        if g is None:
+            continue
+        mv = obj.data.vertices
+        if len(mv) != len(g.vertices):
+            raise RuntimeError(
+                "mesh '%s' has %d vertices but the source group has %d — adding or "
+                "removing geometry (topology edits) isn't supported yet; reshape "
+                "with the same vertex count" % (obj.name, len(mv), len(g.vertices)))
+        for i, bv in enumerate(mv):
+            ex, ey, ez = conv_inv(bv.co)
+            v = g.vertices[i]
+            if v is None:
+                continue
+            if (round(v["x"], 3), round(v["y"], 3), round(v["z"], 3)) != \
+                    (round(ex, 3), round(ey, 3), round(ez, 3)):
+                v["x"], v["y"], v["z"] = ex, ey, ez
+                edited += 1
+    if edited:
+        mm.model.edited = True
+    return edited
+
+
 def build_model_from_scene(arm_obj):
     """Re-load the source PAC and apply the scene's edits; return the MonsterModel."""
     src = arm_obj.get("mhfu_source_pac")
@@ -132,6 +176,7 @@ def build_model_from_scene(arm_obj):
     mm = load_pac(src)
     _apply_actions(arm_obj, mm)
     _apply_bindpose(arm_obj, mm)
+    _apply_meshes(arm_obj, mm)
     return mm
 
 
