@@ -197,3 +197,23 @@ def export_pac(arm_obj, filepath, target_species=None):
     with open(filepath, "wb") as f:
         f.write(data)
     return rep
+
+
+def inject_to_live(arm_obj, target_species=None, inject_dir=None):
+    """Phase 4: push the edited monster to the running game (no on-disk edits).
+
+    Validates, repacks, and atomically drops the bytes into the PPSSPP memstick
+    inject dir as `file_<id>.bin`; the PRX (`mhfu_inject`) overwrites the species'
+    loaded buffer in place. The fileId is parsed from the source PAC name.
+    Returns (report, written_path). Raises on validation error.
+    """
+    from mhfu_model import inject as K_inject
+    mm = build_model_from_scene(arm_obj)
+    rep = K.validate(mm.model, mm.skeleton, mm.anim, target_species=target_species)
+    if not rep.ok:
+        raise RuntimeError("inject blocked — %d constraint error(s):\n%s"
+                           % (len(rep.errors), "\n".join(str(r) for r in rep.errors)))
+    src = arm_obj.get("mhfu_source_pac") or ""
+    file_id = K_inject.file_id_from_name(src)
+    path = K_inject.write_inject_bytes(repack(mm), file_id, inject_dir)
+    return rep, path

@@ -120,6 +120,32 @@ class EXPORT_OT_mhfu_monster(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+class INJECT_OT_mhfu_monster(bpy.types.Operator):
+    """Phase 4: push the edit to the running game (no file dialog, no on-disk edits)."""
+    bl_idname = "mhfu.inject_monster"
+    bl_label = "Push to Live Game"
+    bl_description = ("Validate + repack the active monster and drop it in the PPSSPP "
+                      "memstick inject dir; the PRX overwrites the live buffer in place "
+                      "(anim updates next frame, skeleton/geom on section re-entry)")
+
+    def execute(self, context):
+        arm = _active_monster(context)
+        if arm is None:
+            self.report({"ERROR"}, "No imported MHFU monster (armature) in the scene")
+            return {"CANCELLED"}
+        try:
+            from . import exporter
+            import importlib
+            importlib.reload(exporter)
+            rep, path = exporter.inject_to_live(arm)
+        except Exception as exc:
+            self.report({"ERROR"}, "MHFU inject failed: %s" % exc)
+            raise
+        self.report({"INFO"}, "Pushed to live game: %s (%d warning(s))"
+                    % (path, len(rep.warnings)))
+        return {"FINISHED"}
+
+
 class VIEW3D_PT_mhfu_compat(bpy.types.Panel):
     """Sidebar panel: run the constraint validator on the active monster."""
     bl_label = "MHFU Compatibility"
@@ -152,6 +178,8 @@ class VIEW3D_PT_mhfu_compat(bpy.types.Panel):
                 box.label(text=line[:120], icon=ic)
         layout.operator(EXPORT_OT_mhfu_monster.bl_idname,
                         text="Export PAC (blocked on errors)", icon="EXPORT")
+        layout.operator(INJECT_OT_mhfu_monster.bl_idname,
+                        text="Push to Live Game (blocked on errors)", icon="PLAY")
 
 
 class VALIDATE_OT_mhfu_monster(bpy.types.Operator):
@@ -184,7 +212,8 @@ def _menu_export(self, context):
 
 
 _CLASSES = (IMPORT_OT_mhfu_monster, EXPORT_OT_mhfu_monster,
-            VALIDATE_OT_mhfu_monster, VIEW3D_PT_mhfu_compat)
+            INJECT_OT_mhfu_monster, VALIDATE_OT_mhfu_monster,
+            VIEW3D_PT_mhfu_compat)
 
 
 def register():
