@@ -68,8 +68,50 @@ def _build_armature(skel, name, coll):
     return arm_obj
 
 
-def _build_meshes(model, skel, name, coll, arm_obj):
+def _build_materials(mm, name):
+    """Decode the PAC's TMH textures into Blender images + image-textured materials.
+    Returns a list indexed by texture index (a mesh group's `material` field). Empty
+    if there is no texture sub or it can't be decoded (DXT). Best-effort: never raises."""
+    mats = []
+    try:
+        from mhfu_model.tmh import decode_tmh
+        raw = mm.texture.raw if getattr(mm, "texture", None) else None
+        imgs = decode_tmh(raw) if raw else []
+    except Exception as exc:           # never block geometry import on textures
+        print("[mhfu] texture decode skipped: %s" % exc)
+        imgs = []
+    for tex in imgs:
+        w, h, src = tex["width"], tex["height"], tex["rgba"]
+        img = bpy.data.images.new("%s_tex%02d" % (name, tex["index"]), width=w, height=h, alpha=True)
+        # decoded rows are top-down; Blender image rows are bottom-up -> flip + /255
+        inv = 1.0 / 255.0
+        px = [0.0] * (w * h * 4)
+        rowlen = w * 4
+        for r in range(h):
+            s = (h - 1 - r) * rowlen
+            d = r * rowlen
+            row = src[s:s + rowlen]
+            for k in range(rowlen):
+                px[d + k] = row[k] * inv
+        img.pixels.foreach_set(px)
+        img.pack()
+        mat = bpy.data.materials.new("%s_mat%02d" % (name, tex["index"]))
+        mat.use_nodes = True
+        nt = mat.node_tree
+        bsdf = nt.nodes.get("Principled BSDF")
+        tnode = nt.nodes.new("ShaderNodeTexImage")
+        tnode.image = img
+        if bsdf:
+            nt.links.new(tnode.outputs["Color"], bsdf.inputs["Base Color"])
+            nt.links.new(tnode.outputs["Alpha"], bsdf.inputs["Alpha"])
+        mat.blend_method = "CLIP"
+        mats.append(mat)
+    return mats
+
+
+def _build_meshes(model, skel, name, coll, arm_obj, materials=None):
     n_bones = len(skel.bones)
+    materials = materials or []
     objs = []
     for g in model.mesh_groups:
         me = bpy.data.meshes.new("%s_grp%02d" % (name, g.index))
@@ -85,6 +127,10 @@ def _build_meshes(model, skel, name, coll, arm_obj):
                     vi = me.loops[li].vertex_index
                     v = g.vertices[vi]
                     uvl.data[li].uv = (v.get("u", 0.0), 1.0 - v.get("v", 0.0))
+        # texture material (g.material = texture index into the decoded TMH set)
+        if materials:
+            mi = g.material if 0 <= g.material < len(materials) else 0
+            me.materials.append(materials[mi])
         obj = bpy.data.objects.new(me.name, me)
         coll.objects.link(obj)
         # rigid skin: full-weight this group to its bone via an Armature modifier
@@ -144,11 +190,12 @@ def import_pac(filepath, import_anims=True):
     # Stash the source path so the exporter can re-load it and apply only the
     # edits read from the scene (untouched sub-resources stay byte-identical).
     arm_obj["mhfu_source_pac"] = os.path.abspath(filepath)
+    materials = _build_materials(mm, name)
     if mm.model:
-        _build_meshes(mm.model, mm.skeleton, name, coll, arm_obj)
+        _build_meshes(mm.model, mm.skeleton, name, coll, arm_obj, materials)
     n = _build_actions(mm.anim.animations if (import_anims and mm.anim) else [], arm_obj)
 
-    print("[mhfu] imported %s: %d bones, %d mesh groups, %d animations"
+    print("[mhfu] imported %s: %d bones, %d mesh groups, %d animations, %d textures"
           % (name, len(mm.skeleton.bones),
-             len(mm.model.mesh_groups) if mm.model else 0, n))
+             len(mm.model.mesh_groups) if mm.model else 0, n, len(materials)))
     return arm_obj
