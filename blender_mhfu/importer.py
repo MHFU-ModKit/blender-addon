@@ -101,6 +101,14 @@ def _build_materials(mm, name):
         bsdf = nt.nodes.get("Principled BSDF")
         tnode = nt.nodes.new("ShaderNodeTexImage")
         tnode.image = img
+        tnode.interpolation = "Closest"          # crisp PSP-style texels, not blurred
+        # Explicitly drive the texture from our "UV" map. Without this, the image
+        # node falls back to generated/object coords -> the texture smears across the
+        # model's bounding box (the streaky look). The UVMap node resolves by name at
+        # render, so it is fine that the meshes/UV layers are built afterwards.
+        uvnode = nt.nodes.new("ShaderNodeUVMap")
+        uvnode.uv_map = "UV"
+        nt.links.new(uvnode.outputs["UV"], tnode.inputs["Vector"])
         if bsdf:
             nt.links.new(tnode.outputs["Color"], bsdf.inputs["Base Color"])
             nt.links.new(tnode.outputs["Alpha"], bsdf.inputs["Alpha"])
