@@ -1,10 +1,18 @@
-# blender_mhfu — MHFU big-monster import/export (Phases 1–3)
+# blender_mhfu — MHFU big-monster import/export + live inject (Phases 1–4)
 
-Imports a Monster Hunter Freedom Unite big-monster model PAC (`file_0XXXX.bin`,
-e.g. Tigrex = `file_06134`) into Blender as an armature + rigid-skinned meshes +
-animations, and **exports edits back to an engine-valid PAC** through the
-constraint validator. Thin `bpy` glue over the `mhfu_model` library (all
+Imports a Monster Hunter Freedom Unite big-monster model PAC (`file_0XXXX.bin`)
+into Blender as an armature + rigid-skinned meshes + animations, and **exports
+edits back to an engine-valid PAC** (or pushes them to the running game) through
+the constraint validator. Thin `bpy` glue over the `mhfu_model` library (all
 format/math/validation).
+
+> **Import the file the game actually loads for your target monster** — it is NOT
+> always `file_0{em_id+0x17AB}`. The native-Tigrex-quest Tigrex's model is
+> **`file_06185`**, not `file_06134`/em75 (which that quest never loads). Find the
+> real file by linking the live entity to its model buffer (memory
+> `phase4-descriptor-table-seam`). **Push to Live** requires the edit to keep the
+> **same total file size**, and for a dual-set PAC the **PMO geometry** is the
+> editable part.
 
 ## Install
 
