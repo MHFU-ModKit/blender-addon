@@ -52,9 +52,15 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
 - **Geometry edits = reshape only (same topology).** Moving mesh vertices is carried
   through export (re-encoded in place into the existing vertex buffers); adding or
   removing vertices/faces is rejected with a clear error (a GE-list rebuild — Phase 5).
-- **Object-level transforms aren't captured** — edit vertices in Edit Mode (the
-  exporter reads mesh-local vertex positions, not the object matrix).
-- **Textures deferred** — UVs are imported but TMH→image is a follow-up.
+  The PAC must also stay the **same total size** for live inject (in-place overwrite).
+- **Both Edit-Mode vertex moves AND Object-Mode transforms export** — Object-Mode
+  move/scale/rotate of a piece is baked relative to the armature; scaling the whole
+  armature is ignored (a viewport-fit aid). Edit a piece in either mode.
+- **Textures import** — TMH → packed Blender images + Principled materials, UV-mapped
+  (view in Material Preview / Rendered). DXT3/5 textures (rare) are skipped.
+- **Live inject has an intermittent crash on section entry (race)** — the PRX overwrites
+  the model buffer on a worker thread that can collide with the engine's parse; if it
+  crashes, retry the cold boot (the edit itself is fine). Synchronous-overwrite fix is TODO.
 - **Ease tangents** on keyframes aren't mapped to Blender handles yet (the engine
   uses a cubic `spline()` with ease-in/out; treated as plain keyframes for now).
 - Rotation order / root-motion scale may need a per-species tweak
