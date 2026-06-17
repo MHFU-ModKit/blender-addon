@@ -134,6 +134,7 @@ def _apply_meshes(arm_obj, mm):
     a topology edit the encoder can't represent yet -> raise a clear error here."""
     if not mm.model:
         return 0
+    arm_inv = arm_obj.matrix_world.inverted_safe()   # bake object transforms too
     groups = {g.index: g for g in mm.model.mesh_groups}
     edited = 0
     for obj in arm_obj.children:
@@ -152,8 +153,9 @@ def _apply_meshes(arm_obj, mm):
                 "mesh '%s' has %d vertices but the source group has %d — adding or "
                 "removing geometry (topology edits) isn't supported yet; reshape "
                 "with the same vertex count" % (obj.name, len(mv), len(g.vertices)))
-        for i, bv in enumerate(mv):
-            ex, ey, ez = conv_inv(bv.co)
+        xf = arm_inv @ obj.matrix_world          # vertex -> armature(import) frame:
+        for i, bv in enumerate(mv):              # captures Object-Mode transforms too
+            ex, ey, ez = conv_inv(xf @ bv.co)
             v = g.vertices[i]
             if v is None:
                 continue
