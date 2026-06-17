@@ -203,9 +203,16 @@ def inject_to_live(arm_obj, target_species=None, inject_dir=None):
     """Phase 4: push the edited monster to the running game (no on-disk edits).
 
     Validates, repacks, and atomically drops the bytes into the PPSSPP memstick
-    inject dir as `file_<id>.bin`; the PRX (`mhfu_inject`) overwrites the species'
-    loaded buffer in place. The fileId is parsed from the source PAC name.
-    Returns (report, written_path). Raises on validation error.
+    inject dir as `file_<id>.bin` PLUS a `.orig` copy of the original source PAC.
+    The PRX content-matches the live RAW buffer against `.orig` before overwriting
+    it with our bytes (so only the intended species is touched). The fileId is
+    parsed from the source PAC name. Returns (report, written_path). Raises on
+    validation error.
+
+    NOTE: a quest's monster does NOT always use the file_0{em_id+0x17AB} PAC — the
+    fileId is taken from whatever source PAC you imported, so import the file the
+    game actually loads for that monster (e.g. the native-Tigrex-quest Tigrex is
+    file_06185, not file_06134).
     """
     from mhfu_model import inject as K_inject
     mm = build_model_from_scene(arm_obj)
@@ -215,5 +222,11 @@ def inject_to_live(arm_obj, target_species=None, inject_dir=None):
                            % (len(rep.errors), "\n".join(str(r) for r in rep.errors)))
     src = arm_obj.get("mhfu_source_pac") or ""
     file_id = K_inject.file_id_from_name(src)
-    path = K_inject.write_inject_bytes(repack(mm), file_id, inject_dir)
+    orig = None
+    try:
+        with open(src, "rb") as f:
+            orig = f.read()      # pristine source = the PRX content-match gate
+    except OSError:
+        pass                     # gate falls back to a prefix match if absent
+    path = K_inject.write_inject_bytes(repack(mm), file_id, inject_dir, orig=orig)
     return rep, path
