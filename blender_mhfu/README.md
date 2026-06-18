@@ -58,9 +58,11 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
   armature is ignored (a viewport-fit aid). Edit a piece in either mode.
 - **Textures import** — TMH → packed Blender images + Principled materials, UV-mapped
   (view in Material Preview / Rendered). DXT3/5 textures (rare) are skipped.
-- **Live inject has an intermittent crash on section entry (race)** — the PRX overwrites
-  the model buffer on a worker thread that can collide with the engine's parse; if it
-  crashes, retry the cold boot (the edit itself is fine). Synchronous-overwrite fix is TODO.
+- **Live inject is racefree (no crashes)** — the overwrite runs synchronously on the game
+  thread via a prefix-trampoline on the engine's `get_subresource 0x088B89B0` (the
+  pre-transform point where the big-mon loader reads the raw PAC). Proven live 2026-06-18:
+  a Blender-edited Tigrex distorts on screen with zero crashes. (The old worker-thread
+  overwrite that could collide with the engine's parse is gone.)
 - **Ease tangents** on keyframes aren't mapped to Blender handles yet (the engine
   uses a cubic `spline()` with ease-in/out; treated as plain keyframes for now).
 - Rotation order / root-motion scale may need a per-species tweak
