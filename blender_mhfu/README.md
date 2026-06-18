@@ -47,6 +47,21 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
   repacks. An unedited import→export reproduces the source file byte-for-byte; an
   edit changes only the affected words (or de-aliases a shared clip).
 
+## Quick render check (offline visual)
+
+`render_check.py` imports a PAC (pristine / reshaped / grown), auto-frames a camera,
+front-lights it, and writes a PNG — a fast eyeball of an edit without booting the game
+(the in-game render is still ground truth):
+
+```bash
+/Applications/Blender.app/Contents/MacOS/Blender --background \
+    --python blender_mhfu/render_check.py -- <pac.bin> <out.png>
+```
+
+No args → renders the live grown Tigrex PAC from the PPSSPP inject dir to
+`/tmp/tigrex_edited.png`. This is the formalized version of the render that confirmed the
+Phase-5 textured/lit added dome.
+
 ## Known limitations
 
 - **Geometry edits — reshape AND grow.** Moving mesh vertices (reshape) is re-encoded in
