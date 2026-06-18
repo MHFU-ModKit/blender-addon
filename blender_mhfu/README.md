@@ -49,10 +49,16 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
 
 ## Known limitations
 
-- **Geometry edits = reshape only (same topology).** Moving mesh vertices is carried
-  through export (re-encoded in place into the existing vertex buffers); adding or
-  removing vertices/faces is rejected with a clear error (a GE-list rebuild — Phase 5).
-  The PAC must also stay the **same total size** for live inject (in-place overwrite).
+- **Geometry edits = reshape only (same topology) on the live/export path.** Moving mesh
+  vertices is carried through export (re-encoded in place into the existing vertex buffers);
+  adding or removing vertices/faces is rejected by `pmo.py` with a clear error, and the PAC
+  must stay the **same total size** for live inject (in-place overwrite). **Topology GROWTH
+  now has a separate encoder** — `tools/mhfu_model/pmo_topology.py` (CLI: `python -m
+  mhfu_model.pmo_topology in.bin out.bin -n <verts>`) rebuilds the GE-list region to add
+  vertices/faces within an existing vertex group (≤256 verts/group; new mesh group =
+  undefined bone binding, so not supported). The grown PAC is **bigger**, so it can't use
+  the same-size live seam — deliver via DATA.BIN repack or the FUComplete loose-file
+  replacer. (Blender export is not yet wired to this; it's a CLI/library path for now.)
 - **Both Edit-Mode vertex moves AND Object-Mode transforms export** — Object-Mode
   move/scale/rotate of a piece is baked relative to the armature; scaling the whole
   armature is ignored (a viewport-fit aid). Edit a piece in either mode.
