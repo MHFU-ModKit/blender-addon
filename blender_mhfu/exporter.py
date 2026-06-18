@@ -125,13 +125,32 @@ def _apply_bindpose(arm_obj, mm):
 _GRP_RE = re.compile(r"_grp(\d+)$")
 
 
-def _apply_meshes(arm_obj, mm):
-    """Write edited mesh-object vertex positions back into the model's groups.
+def _uv_by_vertex(mesh):
+    """Per-vertex UV (first loop's UV for each vertex) from the active UV layer."""
+    uvl = mesh.uv_layers.active
+    if uvl is None:
+        return {}
+    out = {}
+    for poly in mesh.polygons:
+        for li in range(poly.loop_start, poly.loop_start + poly.loop_total):
+            vi = mesh.loops[li].vertex_index
+            if vi not in out:
+                uv = uvl.data[li].uv
+                out[vi] = (uv.x, uv.y)
+    return out
 
-    Each imported mesh object is `<name>_grpNN` and parented to the armature; its
-    vertex order matches the group's. A vertex MOVE updates the group's position
-    (engine units, via conv_inv) and flags `model.edited`. A vertex-COUNT change is
-    a topology edit the encoder can't represent yet -> raise a clear error here."""
+
+def _apply_meshes(arm_obj, mm):
+    """Write edited mesh-object vertex positions back into the model's groups, and
+    collect any ADDED geometry for the topology pass.
+
+    Each imported mesh object is `<name>_grpNN` (NN = draw order) and parented to the
+    armature; its first len(group) vertices keep the group's order. A MOVE of an
+    existing vertex updates the group position (engine units, via conv_inv) and flags
+    `model.edited`. EXTRA vertices beyond the source count are NEW geometry: their
+    positions / normals / UVs are read from Blender and stashed on
+    `model.additions` (keyed by the group's source vgroup index `vg_rec`), applied
+    after repack via pmo_topology. Removing vertices is still rejected."""
     if not mm.model:
         return 0
     arm_inv = arm_obj.matrix_world.inverted_safe()   # bake object transforms too
@@ -148,14 +167,16 @@ def _apply_meshes(arm_obj, mm):
         if g is None:
             continue
         mv = obj.data.vertices
-        if len(mv) != len(g.vertices):
+        n_old = len(g.vertices)
+        if len(mv) < n_old:
             raise RuntimeError(
-                "mesh '%s' has %d vertices but the source group has %d — adding or "
-                "removing geometry (topology edits) isn't supported yet; reshape "
-                "with the same vertex count" % (obj.name, len(mv), len(g.vertices)))
+                "mesh '%s' has %d vertices but the source group has %d — REMOVING "
+                "geometry isn't supported; keep >= the original count"
+                % (obj.name, len(mv), n_old))
         xf = arm_inv @ obj.matrix_world          # vertex -> armature(import) frame:
-        for i, bv in enumerate(mv):              # captures Object-Mode transforms too
-            ex, ey, ez = conv_inv(xf @ bv.co)
+        nf = xf.to_3x3()                         # normals: rotation/scale part only
+        for i in range(n_old):                   # captures Object-Mode transforms too
+            ex, ey, ez = conv_inv(xf @ mv[i].co)
             v = g.vertices[i]
             if v is None:
                 continue
@@ -163,6 +184,30 @@ def _apply_meshes(arm_obj, mm):
                     (round(ex, 3), round(ey, 3), round(ez, 3)):
                 v["x"], v["y"], v["z"] = ex, ey, ez
                 edited += 1
+        if len(mv) == n_old:
+            continue
+        # --- ADDED geometry: extra verts [n_old, len(mv)) + the faces touching them
+        mesh = obj.data
+        uvmap = _uv_by_vertex(mesh)
+        new_verts = []
+        for i in range(n_old, len(mv)):
+            ex, ey, ez = conv_inv(xf @ mv[i].co)
+            nx, ny, nz = conv_inv(nf @ mv[i].normal)
+            bu, bv = uvmap.get(i, (0.0, 0.0))    # un-flip V (importer stored 1.0 - v)
+            new_verts.append({"x": ex, "y": ey, "z": ez,
+                              "i": nx, "j": ny, "k": nz, "u": bu, "v": 1.0 - bv})
+        mesh.calc_loop_triangles()
+        tris = []
+        for lt in mesh.loop_triangles:
+            vi = tuple(lt.vertices)
+            if any(x >= n_old for x in vi):      # only faces that touch new verts
+                tris.append(vi)
+        if not tris:
+            raise RuntimeError(
+                "mesh '%s' has %d extra vertices but no faces using them — add faces "
+                "to the new geometry" % (obj.name, len(mv) - n_old))
+        mm.model.additions.append({"vg_rec": g.vg_rec, "verts": new_verts,
+                                   "tris": tris})
     if edited:
         mm.model.edited = True
     return edited
@@ -182,6 +227,29 @@ def build_model_from_scene(arm_obj):
     return mm
 
 
+def _apply_additions(pac_bytes, model):
+    """Apply any ADDED geometry (model.additions) to a repacked PAC via the topology
+    encoder, returning a (bigger) PAC. No-op when there are no additions, so the
+    same-size reshape path is byte-for-byte unchanged."""
+    if not getattr(model, "additions", None):
+        return pac_bytes
+    from mhfu_model import pac as _pac
+    from mhfu_model import pmo_topology as topo
+    P = _pac.MonsterPac.from_bytes(pac_bytes)
+    sub = next((s for s in P.subs if s.magic == b"pmo\x00"), None)
+    if sub is None:
+        raise RuntimeError("no PMO sub-resource to grow")
+    header, groups = topo.parse(sub.data)
+    scale = header[2:5]
+    for add in model.additions:
+        g = groups[add["vg_rec"]]
+        topo.grow_group_explicit(g, add["verts"], add["tris"], scale=scale,
+                                 weight_slot=add.get("weight_slot", 0))
+    grown = topo.serialize(sub.data, header, groups)
+    P.subs[sub.index] = _pac.SubResource(sub.index, grown)
+    return P.to_bytes()
+
+
 def validate_scene(arm_obj, target_species=None):
     """Build the edited model and run the constraint validator. Returns a Report."""
     mm = build_model_from_scene(arm_obj)
@@ -195,7 +263,7 @@ def export_pac(arm_obj, filepath, target_species=None):
     if not rep.ok:
         raise RuntimeError("export blocked — %d constraint error(s):\n%s"
                            % (len(rep.errors), "\n".join(str(r) for r in rep.errors)))
-    data = repack(mm)
+    data = _apply_additions(repack(mm), mm.model)
     with open(filepath, "wb") as f:
         f.write(data)
     return rep
@@ -230,5 +298,11 @@ def inject_to_live(arm_obj, target_species=None, inject_dir=None):
             orig = f.read()      # pristine source = the PRX content-match gate
     except OSError:
         pass                     # gate falls back to a prefix match if absent
-    path = K_inject.write_inject_bytes(repack(mm), file_id, inject_dir, orig=orig)
+    data = _apply_additions(repack(mm), mm.model)
+    if getattr(mm.model, "additions", None):
+        # grown PAC -> relocate path (can't overwrite the fixed raw buffer in place).
+        # Drive it with: mhfu.inject_relocate(<engine fid = file_id+1>, grown, orig)
+        path = K_inject.write_relocate_bytes(data, file_id, inject_dir, orig=orig)
+    else:
+        path = K_inject.write_inject_bytes(data, file_id, inject_dir, orig=orig)
     return rep, path

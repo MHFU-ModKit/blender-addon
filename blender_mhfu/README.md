@@ -49,16 +49,20 @@ only your edits onto a fresh load — untouched sub-resources stay byte-identica
 
 ## Known limitations
 
-- **Geometry edits = reshape only (same topology) on the live/export path.** Moving mesh
-  vertices is carried through export (re-encoded in place into the existing vertex buffers);
-  adding or removing vertices/faces is rejected by `pmo.py` with a clear error, and the PAC
-  must stay the **same total size** for live inject (in-place overwrite). **Topology GROWTH
-  now has a separate encoder** — `tools/mhfu_model/pmo_topology.py` (CLI: `python -m
-  mhfu_model.pmo_topology in.bin out.bin -n <verts>`) rebuilds the GE-list region to add
-  vertices/faces within an existing vertex group (≤256 verts/group; new mesh group =
-  undefined bone binding, so not supported). The grown PAC is **bigger**, so it can't use
-  the same-size live seam — deliver via DATA.BIN repack or the FUComplete loose-file
-  replacer. (Blender export is not yet wired to this; it's a CLI/library path for now.)
+- **Geometry edits — reshape AND grow.** Moving mesh vertices (reshape) is re-encoded in
+  place into the existing vertex buffers, same total size (the live in-place seam). **ADDING
+  geometry now exports too:** put **extra vertices in an existing `_grpNN` mesh object** (keep
+  the first N verts in their original order; append your new verts + faces after). On export
+  the new verts/faces are routed through `tools/mhfu_model/pmo_topology.py` (a GE-list-region
+  rebuild) — their positions, UVs and normals come straight from Blender; they bind 100% to
+  the group's primary bone (slot 0). REMOVING vertices is still rejected. Constraints: stay
+  **within the monster's bounding box** (positions saturate at the group's per-axis scale);
+  a group auto-promotes to 16-bit indices past 256 verts; a brand-new mesh *group* (vs extra
+  verts in an existing one) has undefined bone binding and is not supported. A grown PAC is
+  **bigger** than the engine's fixed raw buffer, so `inject_to_live` auto-routes it to the
+  **relocate-source** live path (`file_<id>_grown.bin` + `mhfu.inject_relocate`) instead of
+  the same-size overwrite — no disk edits. CLI-only grow (no Blender) also exists: `python -m
+  mhfu_model.pmo_topology in.bin out.bin -n <verts> --spread <r> [--bone i] [--weight-slot s]`.
 - **Both Edit-Mode vertex moves AND Object-Mode transforms export** — Object-Mode
   move/scale/rotate of a piece is baked relative to the armature; scaling the whole
   armature is ignored (a viewport-fit aid). Edit a piece in either mode.
