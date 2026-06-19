@@ -1,4 +1,4 @@
-"""Blender scene builder for MHFU big-monster PACs (read-only importer, Phase 1).
+"""Blender scene builder for MHFU + MHP3rd big-monster PACs.
 
 Thin `bpy` glue over `mhfu_model` (parsing) + `mhfu_model.convert` (math). Builds:
   * an armature from the skeleton bind-pose (bones parented by the index tree),
@@ -11,13 +11,21 @@ conv(x,y,z) = (x, -z, y), applied uniformly to bone heads and vertices.
 
 Geometry/skeleton are correct; rotation order / root-motion scale for animations
 may need a tweak per species — verify visually and adjust ANIM_ROT_MODE if needed.
+
+MHP3rd (gen-3) PACs are detected by 0x80000000 skeleton magic and routed through
+pmo_p3rd.parse / skeleton_p3rd.parse automatically.  For in-quest PACs the
+companion GE file (file_NNNN+1.bin) is probed automatically; pass `geo_path`
+explicitly if the sibling auto-probe fails.  The export path always targets MHFU
+1.0 — once imported, the monster can be re-exported and injected into MHFU.
 """
 from __future__ import annotations
+
+import os
 
 import bpy
 from mathutils import Vector
 
-from mhfu_model import load_pac
+from mhfu_model import load_pac, load_pac_p3rd
 from mhfu_model import convert as C
 
 ANIM_ROT_MODE = "XYZ"
@@ -182,10 +190,14 @@ def _build_actions(anims, arm_obj):
     return made
 
 
-def import_pac(filepath, import_anims=True):
-    """Import a big-monster PAC into the current scene. Returns the armature object."""
-    import os
-    mm = load_pac(filepath)
+def _import_mm(mm, filepath, import_anims=True, source_mhfu_pac=None):
+    """Shared Blender scene builder for any MonsterModel (MHFU or MHP3rd).
+
+    `source_mhfu_pac`: if set, stashed as `mhfu_source_pac` on the armature so
+    the exporter re-loads it for MHFU 1.0 write-back.  For MHFU imports this is
+    the filepath itself; for MHP3rd imports it should be the converted MHFU target
+    path (or None while that conversion is pending — the exporter will warn).
+    """
     name = os.path.splitext(os.path.basename(filepath))[0]
 
     coll = bpy.data.collections.new(name)
@@ -197,13 +209,58 @@ def import_pac(filepath, import_anims=True):
     arm_obj = _build_armature(mm.skeleton, name, coll)
     # Stash the source path so the exporter can re-load it and apply only the
     # edits read from the scene (untouched sub-resources stay byte-identical).
-    arm_obj["mhfu_source_pac"] = os.path.abspath(filepath)
+    src = source_mhfu_pac or os.path.abspath(filepath)
+    arm_obj["mhfu_source_pac"] = src
+    # Mark game origin so downstream tools can branch on it.
+    is_p3rd = (mm.model is not None and
+               getattr(mm.model, "version", None) == b"102\x00")
+    arm_obj["mhfu_source_game"] = "p3rd" if is_p3rd else "mhfu"
+
     materials = _build_materials(mm, name)
     if mm.model:
         _build_meshes(mm.model, mm.skeleton, name, coll, arm_obj, materials)
     n = _build_actions(mm.anim.animations if (import_anims and mm.anim) else [], arm_obj)
 
-    print("[mhfu] imported %s: %d bones, %d mesh groups, %d animations, %d textures"
-          % (name, len(mm.skeleton.bones),
-             len(mm.model.mesh_groups) if mm.model else 0, n, len(materials)))
+    print("[mhfu] imported %s (%s): %d bones, %d mesh groups, %d animations, %d textures"
+          % (name, arm_obj["mhfu_source_game"],
+             len(mm.skeleton.bones),
+             len(mm.model.mesh_groups) if mm.model else 0,
+             n, len(materials)))
     return arm_obj
+
+
+def import_pac(filepath, import_anims=True):
+    """Import a big-monster PAC into the current scene. Returns the armature object.
+
+    Auto-detects MHFU (0xC0000000 skeleton) vs MHP3rd (0x80000000 skeleton).
+    For MHP3rd in-quest PACs the companion GE file (file_NNNN+1.bin) is probed
+    automatically from the same directory — use import_pac_p3rd() to supply it
+    explicitly.
+    """
+    mm = load_pac(filepath)      # auto-detects game; companion probe built into load_pac_p3rd
+    return _import_mm(mm, filepath, import_anims=import_anims,
+                      source_mhfu_pac=os.path.abspath(filepath))
+
+
+def import_pac_p3rd(filepath, geo_path=None, anim_path=None, import_anims=True,
+                    source_mhfu_pac=None):
+    """Import an MHP3rd (gen-3) PAC into the current scene.
+
+    Parameters
+    ----------
+    filepath:       Path to the MHP3rd model PAC (e.g. file_05148.bin).
+    geo_path:       Path to the companion GE file (file_05149.bin for file_05148).
+                    If None, the function probes for `file_(N+1).bin` automatically.
+    anim_path:      Path to the separate animation file (e.g. file_05252.bin for
+                    em023 Black Tigrex, file_05413.bin for em058 Tigrex).
+                    Decoded via anim.parse_p3rd(). Optional — geometry imports without it.
+    import_anims:   Build Blender Actions from animation data (if anim_path provided).
+    source_mhfu_pac: Path to the MHFU 1.0 PAC this MHP3rd monster will be converted
+                    into.  Stashed on the armature so the exporter can write back.
+                    Leave None if you just want to view the geometry.
+
+    Returns the armature object.
+    """
+    mm = load_pac_p3rd(filepath, geo_path=geo_path, anim_path=anim_path)
+    return _import_mm(mm, filepath, import_anims=import_anims,
+                      source_mhfu_pac=source_mhfu_pac)
