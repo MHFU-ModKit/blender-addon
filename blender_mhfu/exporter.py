@@ -269,6 +269,80 @@ def export_pac(arm_obj, filepath, target_species=None):
     return rep
 
 
+def export_ingame_bindpose_pac(arm_obj, filepath, split=None):
+    """Export a big-monster PAC with a real MHFU **in-game** bind-pose animation.
+
+    This is the path that produces a `.bin` the MHFU engine's per-frame animation
+    walker accepts (the flat lobby anim written by `export_pac` is the wrong format
+    for in-game playback — see docs/ANIMATION_FORMAT.md). It re-encodes the
+    skeleton + model from the scene, carries textures + secondary subs through
+    verbatim, and replaces the animation sub with a recursive 3-stream bind-pose
+    (`anim_ingame.swap_anim_to_bindpose`) sized to the skeleton's animated-bone
+    count. Every animated bone falls back to the skeleton bind transform, so the
+    monster renders static in its rest pose — the first milestone toward authored
+    in-game motion. The anim sub is padded to the source size, so the PAC stays the
+    same total size as the source (the proven same-size in-place inject path).
+
+    `split` optionally sets the 3-stream bone partition (default mirrors native:
+    [remainder, 9, 5]). Returns an info dict (animated count + split).
+    """
+    from mhfu_model import anim_ingame as AI
+    mm = build_model_from_scene(arm_obj)
+    # validate geometry/skeleton only; the anim sub is replaced wholesale below.
+    rep = K.validate(mm.model, mm.skeleton, None, target_species=None)
+    if not rep.ok:
+        raise RuntimeError("export blocked — %d constraint error(s):\n%s"
+                           % (len(rep.errors), "\n".join(str(r) for r in rep.errors)))
+    mm.anim = None                       # leave the source anim sub untouched in repack
+    base = repack(mm)                    # skeleton + model re-encoded; anim sub = source bytes
+    out, info = AI.swap_anim_to_bindpose(base, split=split, keep_size=True)
+    with open(filepath, "wb") as f:
+        f.write(out)
+    return info
+
+
+def export_ingame_realmotion_pac(arm_obj, filepath, flat_anim_pac, anim_sub=3,
+                                 host_count=None, split=None):
+    """Export a big-monster PAC with REAL in-game motion from a flat anim source.
+
+    The real-motion sibling of :func:`export_ingame_bindpose_pac`. It re-encodes the
+    skeleton + model from the scene, carries textures + secondary subs through
+    verbatim, parses a FLAT (lobby / MHP3rd `anim.py`) animation pack and converts it
+    to the recursive 3-stream in-game format via
+    :func:`anim_ingame.swap_anim_to_realmotion`.
+
+    ``flat_anim_pac`` is the path to a monster PAC whose sub ``anim_sub`` (default 3)
+    holds the flat animation (e.g. the converted MHP3rd Brute anim). ``host_count``
+    is the bone count the engine's joint walk uses = the **host overlay slot's** count
+    (Tigrex = 45), NOT the injected skeleton's own animated count; pass it for a
+    PORTED monster so the anim partition + skeleton declared count + host all agree
+    (omitting it falls back to the skeleton's count — only correct for a same-rig
+    monster). ``split`` overrides the 3-stream partition (default native-shaped).
+
+    The skeleton sub's animated-count word is auto-synced to ``host_count`` and the
+    anim is padded to the source size (same-size in-place inject). Returns the info
+    dict from :func:`swap_anim_to_realmotion`.
+    """
+    from mhfu_model import anim_ingame as AI
+    from mhfu_model import anim as flatmod
+    from mhfu_model.pac import MonsterPac
+    mm = build_model_from_scene(arm_obj)
+    rep = K.validate(mm.model, mm.skeleton, None, target_species=None)
+    if not rep.ok:
+        raise RuntimeError("export blocked — %d constraint error(s):\n%s"
+                           % (len(rep.errors), "\n".join(str(r) for r in rep.errors)))
+    mm.anim = None
+    base = repack(mm)
+    with open(flat_anim_pac, "rb") as f:
+        fpac = MonsterPac.from_bytes(f.read())
+    flat = flatmod.parse(fpac.subs[anim_sub].data)
+    out, info = AI.swap_anim_to_realmotion(base, flat, host_count=host_count,
+                                           split=split, keep_size=True)
+    with open(filepath, "wb") as f:
+        f.write(out)
+    return info
+
+
 def inject_to_live(arm_obj, target_species=None, inject_dir=None):
     """Phase 4: push the edited monster to the running game (no on-disk edits).
 

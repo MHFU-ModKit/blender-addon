@@ -120,6 +120,41 @@ class EXPORT_OT_mhfu_monster(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+class EXPORT_OT_mhfu_monster_ingame(bpy.types.Operator, ExportHelper):
+    """Export a big-monster .bin with a real MHFU IN-GAME animation.
+
+    The plain "Export MHFU Monster" writes the flat lobby anim, which the engine's
+    per-frame walker rejects in-game. This path writes the recursive 3-stream
+    in-game format (anim_ingame): currently a BIND-POSE (the monster stands in its
+    skeleton rest pose, no crash) — the validated milestone of the in-game anim
+    encoder. Use this to produce a .bin that loads model + bones + textures + a
+    working in-game anim together.
+    """
+    bl_idname = "export_scene.mhfu_monster_ingame"
+    bl_label = "Export MHFU Monster (in-game anim)"
+    bl_options = {"REGISTER"}
+
+    filename_ext = ".bin"
+    filter_glob: StringProperty(default="*.bin", options={"HIDDEN"})
+
+    def execute(self, context):
+        arm = _active_monster(context)
+        if arm is None:
+            self.report({"ERROR"}, "No imported MHFU monster (armature) in the scene")
+            return {"CANCELLED"}
+        try:
+            from . import exporter
+            import importlib
+            importlib.reload(exporter)
+            info = exporter.export_ingame_bindpose_pac(arm, self.filepath)
+        except Exception as exc:
+            self.report({"ERROR"}, "MHFU in-game export failed: %s" % exc)
+            raise
+        self.report({"INFO"}, "Exported in-game bind-pose PAC (%d animated bones, "
+                    "streams %s)" % (info["animated"], info["split"]))
+        return {"FINISHED"}
+
+
 class INJECT_OT_mhfu_monster(bpy.types.Operator):
     """Phase 4: push the edit to the running game (no file dialog, no on-disk edits)."""
     bl_idname = "mhfu.inject_monster"
@@ -178,6 +213,8 @@ class VIEW3D_PT_mhfu_compat(bpy.types.Panel):
                 box.label(text=line[:120], icon=ic)
         layout.operator(EXPORT_OT_mhfu_monster.bl_idname,
                         text="Export PAC (blocked on errors)", icon="EXPORT")
+        layout.operator(EXPORT_OT_mhfu_monster_ingame.bl_idname,
+                        text="Export PAC (in-game anim)", icon="ARMATURE_DATA")
         layout.operator(INJECT_OT_mhfu_monster.bl_idname,
                         text="Push to Live Game (blocked on errors)", icon="PLAY")
 
@@ -209,9 +246,12 @@ def _menu_import(self, context):
 
 def _menu_export(self, context):
     self.layout.operator(EXPORT_OT_mhfu_monster.bl_idname, text="MHFU Monster (.bin)")
+    self.layout.operator(EXPORT_OT_mhfu_monster_ingame.bl_idname,
+                         text="MHFU Monster — in-game anim (.bin)")
 
 
 _CLASSES = (IMPORT_OT_mhfu_monster, EXPORT_OT_mhfu_monster,
+            EXPORT_OT_mhfu_monster_ingame,
             INJECT_OT_mhfu_monster, VALIDATE_OT_mhfu_monster,
             VIEW3D_PT_mhfu_compat)
 
