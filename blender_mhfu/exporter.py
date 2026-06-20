@@ -302,7 +302,9 @@ def export_ingame_bindpose_pac(arm_obj, filepath, split=None):
 
 
 def export_ingame_realmotion_pac(arm_obj, filepath, flat_anim_pac, anim_sub=3,
-                                 host_count=None, split=None):
+                                 host_count=None, split=None,
+                                 src_skeleton_pac=None, src_skeleton_sub=0,
+                                 bone_map=None):
     """Export a big-monster PAC with REAL in-game motion from a flat anim source.
 
     The real-motion sibling of :func:`export_ingame_bindpose_pac`. It re-encodes the
@@ -322,9 +324,21 @@ def export_ingame_realmotion_pac(arm_obj, filepath, flat_anim_pac, anim_sub=3,
     The skeleton sub's animated-count word is auto-synced to ``host_count`` and the
     anim is padded to the source size (same-size in-place inject). Returns the info
     dict from :func:`swap_anim_to_realmotion`.
+
+    CROSS-GAME BONE ALIGNMENT (the generalizable port path): when the source anim's
+    skeleton bone order differs from the scene's MHFU skeleton (different bone count,
+    order, or leading-static roots), copying tracks 1:1 by index tears the mesh. Pass
+    ``src_skeleton_pac`` (the source monster PAC; its sub ``src_skeleton_sub`` holds
+    the source 0xC0000000 skeleton) and the exporter builds a ``bone_map`` via
+    :func:`bone_match.match_skeleton_objects` (target joint -> source bone, by bind
+    position) so each track lands on the joint it actually drives, leaving unmatched
+    target joints static. Or pass an explicit ``bone_map`` to override. Omit both for
+    the legacy 1:1 path (only correct when source and target share bone order).
     """
     from mhfu_model import anim_ingame as AI
     from mhfu_model import anim as flatmod
+    from mhfu_model import bone_match as BM
+    from mhfu_model import skeleton as skelmod
     from mhfu_model.pac import MonsterPac
     mm = build_model_from_scene(arm_obj)
     rep = K.validate(mm.model, mm.skeleton, None, target_species=None)
@@ -336,8 +350,18 @@ def export_ingame_realmotion_pac(arm_obj, filepath, flat_anim_pac, anim_sub=3,
     with open(flat_anim_pac, "rb") as f:
         fpac = MonsterPac.from_bytes(f.read())
     flat = flatmod.parse(fpac.subs[anim_sub].data)
+    # Build the cross-game bone correspondence if a source skeleton was given.
+    if bone_map is None and src_skeleton_pac is not None:
+        with open(src_skeleton_pac, "rb") as f:
+            spac = MonsterPac.from_bytes(f.read())
+        src_skel = skelmod.parse(spac.subs[src_skeleton_sub].data)
+        bone_map = BM.match_skeleton_objects(src_skel, mm.skeleton)
     out, info = AI.swap_anim_to_realmotion(base, flat, host_count=host_count,
-                                           split=split, keep_size=True)
+                                           split=split, keep_size=True,
+                                           bone_map=bone_map)
+    if bone_map is not None:
+        info = dict(info); info["bone_map_matched"] = sum(
+            1 for v in bone_map.values() if v is not None)
     with open(filepath, "wb") as f:
         f.write(out)
     return info
