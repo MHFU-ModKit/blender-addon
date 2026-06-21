@@ -42,7 +42,7 @@ def _reload():
 
 
 import bpy  # noqa: E402
-from bpy.props import BoolProperty, StringProperty  # noqa: E402
+from bpy.props import BoolProperty, IntProperty, StringProperty  # noqa: E402
 from bpy_extras.io_utils import ExportHelper, ImportHelper  # noqa: E402
 
 
@@ -155,6 +155,54 @@ class EXPORT_OT_mhfu_monster_ingame(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+class EXPORT_OT_mhfu_monster_skinned(bpy.types.Operator, ExportHelper):
+    """Export a fully RE-SKINNED big-monster .bin (port path).
+
+    Derives fresh chain-aware blend skinning against the frame skeleton and splices
+    the monster's own geometry + materials into the native frame (same-size, the live
+    inject layout). This is the path for porting a rigid-piece monster onto an MHFU
+    rig — it fixes binding artifacts (e.g. a tail that scrambles under animation) that
+    the plain "Export" (in-place reshape) keeps. Offline twin: tools/build_brute_pac.py.
+    """
+    bl_idname = "export_scene.mhfu_monster_skinned"
+    bl_label = "Export MHFU Monster (re-skin)"
+    bl_options = {"REGISTER"}
+
+    filename_ext = ".bin"
+    filter_glob: StringProperty(default="*.bin", options={"HIDDEN"})
+    frame_pac: StringProperty(
+        name="Frame PAC",
+        description="Native host PAC supplying the skeleton + textures/anim/secondary "
+                    "subs (e.g. file_06185.bin). Empty = use the armature's own source PAC",
+        default="", subtype="FILE_PATH",
+    )
+    nb: IntProperty(name="Bones per vertex", default=3, min=1, max=8,
+                    description="Blend each vertex to its N nearest bones")
+    hops: IntProperty(name="Chain radius", default=1, min=1, max=4,
+                      description="Restrict blend bones to this many skeleton edges from "
+                                  "the nearest bone (1 = tightest, fixes chain scramble)")
+
+    def execute(self, context):
+        arm = _active_monster(context)
+        if arm is None:
+            self.report({"ERROR"}, "No imported MHFU monster (armature) in the scene")
+            return {"CANCELLED"}
+        try:
+            from . import exporter
+            import importlib
+            importlib.reload(exporter)
+            st = exporter.export_skinned_monster_pac(
+                arm, self.filepath, frame_pac=self.frame_pac or None,
+                nb=self.nb, hops=self.hops)
+        except Exception as exc:
+            self.report({"ERROR"}, "MHFU re-skin export failed: %s" % exc)
+            raise
+        self.report({"INFO"}, "Re-skinned PAC: %d vgroups, %d verts, avg %.1f bones/grp, "
+                    "%d/%d B" % (st["vgroups"], st["verts"], st["avg_pal"],
+                                 st["pmo_bytes"], st["slot"]))
+        return {"FINISHED"}
+
+
 class INJECT_OT_mhfu_monster(bpy.types.Operator):
     """Phase 4: push the edit to the running game (no file dialog, no on-disk edits)."""
     bl_idname = "mhfu.inject_monster"
@@ -215,6 +263,8 @@ class VIEW3D_PT_mhfu_compat(bpy.types.Panel):
                         text="Export PAC (blocked on errors)", icon="EXPORT")
         layout.operator(EXPORT_OT_mhfu_monster_ingame.bl_idname,
                         text="Export PAC (in-game anim)", icon="ARMATURE_DATA")
+        layout.operator(EXPORT_OT_mhfu_monster_skinned.bl_idname,
+                        text="Export PAC (re-skin / port)", icon="MOD_ARMATURE")
         layout.operator(INJECT_OT_mhfu_monster.bl_idname,
                         text="Push to Live Game (blocked on errors)", icon="PLAY")
 
@@ -248,10 +298,12 @@ def _menu_export(self, context):
     self.layout.operator(EXPORT_OT_mhfu_monster.bl_idname, text="MHFU Monster (.bin)")
     self.layout.operator(EXPORT_OT_mhfu_monster_ingame.bl_idname,
                          text="MHFU Monster — in-game anim (.bin)")
+    self.layout.operator(EXPORT_OT_mhfu_monster_skinned.bl_idname,
+                         text="MHFU Monster — re-skin / port (.bin)")
 
 
 _CLASSES = (IMPORT_OT_mhfu_monster, EXPORT_OT_mhfu_monster,
-            EXPORT_OT_mhfu_monster_ingame,
+            EXPORT_OT_mhfu_monster_ingame, EXPORT_OT_mhfu_monster_skinned,
             INJECT_OT_mhfu_monster, VALIDATE_OT_mhfu_monster,
             VIEW3D_PT_mhfu_compat)
 

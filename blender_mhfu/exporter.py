@@ -367,6 +367,70 @@ def export_ingame_realmotion_pac(arm_obj, filepath, flat_anim_pac, anim_sub=3,
     return info
 
 
+def _overlay_geometry(geo_model, scene_model):
+    """Copy the scene's edited per-vertex geometry into a SkinModel read from the
+    source PMO, matched by vgroup index. Both come from the same source PMO (same
+    walk order, same vertex counts for single-mesh monsters), so index alignment
+    holds; a vertex-count mismatch on a group is skipped (left as source geometry)
+    rather than risking a torn map. No edits -> identity (reproduces the CLI build).
+    """
+    by_idx = {g.index: g for g in scene_model.mesh_groups}
+    for i, vg in enumerate(geo_model.vgroups):
+        sg = by_idx.get(i)
+        if sg is None or len(sg.vertices) < len(vg.vertices):
+            continue
+        for vi, sv in enumerate(sg.vertices[:len(vg.vertices)]):
+            dv = vg.vertices[vi]
+            if dv is None or sv is None:
+                continue
+            for k in ("x", "y", "z", "u", "v", "i", "j", "k"):
+                if k in sv:
+                    dv[k] = sv[k]
+
+
+def export_skinned_monster_pac(arm_obj, filepath, frame_pac=None,
+                               nb=3, hops=1, target_species=None):
+    """Export the scene as a fully RE-SKINNED MHFU monster PAC (the from-scratch
+    monster path; the offline twin is tools/build_brute_pac.py).
+
+    Unlike :func:`export_pac` (which reshapes the source vgroups in place, keeping
+    their original bone binding), this DERIVES fresh chain-aware blend skinning
+    (:func:`pmo_skin.auto_skin` with the skeleton tree, ``hops``) against a frame
+    skeleton, then splices the Brute's own geometry + material tables into the frame
+    — same-size in-place, the proven live-inject layout. This is the path that fixes
+    a ported monster's binding (e.g. the Brute tail scramble) and the recommended
+    output for porting a rigid-piece monster onto an MHFU rig.
+
+    ``frame_pac`` supplies the skeleton (sub 0) the engine actually drives and the
+    textures/animation/secondary subs carried through verbatim; it defaults to the
+    armature's own source PAC (correct when the scene was imported from a PAC that
+    already pairs the target rig with the ported geometry, e.g. a previous Brute
+    build). For a cross-rig port, pass the native host PAC (e.g. file_06185).
+
+    Returns the build stats dict. The result fits the frame's PMO slot (raises
+    otherwise — lower ``nb`` or use the relocate inject path for a bigger mesh).
+    """
+    from mhfu_model import pmo_skin as PS
+    from mhfu_model.pac import MonsterPac
+    src = arm_obj.get("mhfu_source_pac")
+    if not src:
+        raise RuntimeError("no source PAC on %r — re-import with this addon" % arm_obj.name)
+    frame_path = frame_pac or src
+    mm = build_model_from_scene(arm_obj)                  # geometry incl. scene edits
+    # geometry + the Brute's OWN material/mesh tables come from the source PMO
+    spac = MonsterPac.from_bytes(open(src, "rb").read())
+    pmo_sub = next((s for s in spac.subs if s.data[:4] == b"pmo\x00"), None)
+    if pmo_sub is None:
+        raise RuntimeError("source PAC has no PMO sub-resource")
+    geo = PS.read(pmo_sub.data)
+    _overlay_geometry(geo, mm.model)
+    frame = open(frame_path, "rb").read()
+    pac, stats = PS.splice_skinned_pmo(frame, geo, nb=nb, hops=hops)
+    with open(filepath, "wb") as f:
+        f.write(pac)
+    return stats
+
+
 def inject_to_live(arm_obj, target_species=None, inject_dir=None):
     """Phase 4: push the edited monster to the running game (no on-disk edits).
 
