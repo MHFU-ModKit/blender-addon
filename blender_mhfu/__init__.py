@@ -203,6 +203,56 @@ class EXPORT_OT_mhfu_monster_skinned(bpy.types.Operator, ExportHelper):
         return {"FINISHED"}
 
 
+class PORT_OT_mhfu_p3rd_monster(bpy.types.Operator, ExportHelper):
+    """Port an MHP3rd big monster -> injectable MHFU .bin (generalized port pipeline).
+
+    Pick the MHP3rd source files + the MHFU host frame; this splices the monster's own
+    geometry (chain-aware skinned onto the host rig), its own textures, and its own
+    moveset (retargeted + in-game encoded) into an MHFU PAC. Works for any Tigrex-family
+    MHP3rd big monster (see docs/MHP3RD_FILE_MONSTER_MAP.md). Backend shared with the CLI
+    so results are reproducible.
+    """
+    bl_idname = "export_scene.mhfu_p3rd_port"
+    bl_label = "Port MHP3rd Monster"
+    bl_options = {"REGISTER"}
+
+    filename_ext = ".bin"
+    filter_glob: StringProperty(default="*.bin", options={"HIDDEN"})
+    model_path: StringProperty(name="MHP3rd model PAC", subtype="FILE_PATH",
+                               description="MHP3rd model+skel+TMH PAC (e.g. file_05248)")
+    geo_path: StringProperty(name="GE companion", subtype="FILE_PATH",
+                             description="MHP3rd GE-list companion (model+1, e.g. file_05249); "
+                                         "leave empty if geometry is self-contained")
+    anim_path: StringProperty(name="Moveset", subtype="FILE_PATH",
+                              description="MHP3rd raw moveset (model+2, e.g. file_05250); "
+                                          "empty = keep the host animation")
+    frame_path: StringProperty(name="MHFU host frame", subtype="FILE_PATH",
+                               description="MHFU host PAC (e.g. file_06185 = Tigrex)")
+    nb: IntProperty(name="Bones per vertex", default=3, min=1, max=8)
+    hops: IntProperty(name="Chain radius", default=1, min=1, max=4)
+
+    def execute(self, context):
+        if not self.model_path or not self.frame_path:
+            self.report({"ERROR"}, "Set at least the MHP3rd model PAC + MHFU host frame")
+            return {"CANCELLED"}
+        try:
+            from . import exporter
+            import importlib
+            importlib.reload(exporter)
+            info = exporter.port_p3rd_monster_pac(
+                self.model_path, self.frame_path, self.filepath,
+                geo_path=self.geo_path or None, anim_path=self.anim_path or None,
+                nb=self.nb, hops=self.hops)
+        except Exception as exc:
+            self.report({"ERROR"}, "MHP3rd port failed: %s" % exc)
+            raise
+        self.report({"INFO"}, "Ported: %d verts, %d clips, %d/48 bones matched, %d B%s"
+                    % (info.get("src_verts", 0), info.get("anim_clips", 0),
+                       info.get("bone_map_matched") or 0, info["total"],
+                       " (relocate)" if info["needs_relocate"] else ""))
+        return {"FINISHED"}
+
+
 class INJECT_OT_mhfu_monster(bpy.types.Operator):
     """Phase 4: push the edit to the running game (no file dialog, no on-disk edits)."""
     bl_idname = "mhfu.inject_monster"
@@ -300,10 +350,13 @@ def _menu_export(self, context):
                          text="MHFU Monster — in-game anim (.bin)")
     self.layout.operator(EXPORT_OT_mhfu_monster_skinned.bl_idname,
                          text="MHFU Monster — re-skin / port (.bin)")
+    self.layout.operator(PORT_OT_mhfu_p3rd_monster.bl_idname,
+                         text="MHP3rd Monster → MHFU port (.bin)")
 
 
 _CLASSES = (IMPORT_OT_mhfu_monster, EXPORT_OT_mhfu_monster,
             EXPORT_OT_mhfu_monster_ingame, EXPORT_OT_mhfu_monster_skinned,
+            PORT_OT_mhfu_p3rd_monster,
             INJECT_OT_mhfu_monster, VALIDATE_OT_mhfu_monster,
             VIEW3D_PT_mhfu_compat)
 

@@ -431,6 +431,32 @@ def export_skinned_monster_pac(arm_obj, filepath, frame_pac=None,
     return stats
 
 
+def port_p3rd_monster_pac(model_path, frame_path, filepath, geo_path=None,
+                          anim_path=None, nb=3, hops=1):
+    """Port an MHP3rd big monster -> injectable MHFU PAC (the generalized port path).
+
+    Wraps :func:`mhfu_model.port_p3rd.port_monster` so the Blender addon's
+    "Port P3rd Monster" operator and the CLI (`tools/build_p3rd_port.py`) produce the
+    byte-identical `.bin`. Splices the MHP3rd monster's chain-aware-skinned geometry,
+    its OWN textures, and its OWN moveset (retargeted to the host rig + in-game encoded)
+    onto an MHFU host frame (e.g. the Tigrex `file_06185`).
+
+    ``model_path`` = MHP3rd model+skel+TMH PAC; ``geo_path`` = its GE-list companion
+    (model+1) when geometry is external; ``anim_path`` = its raw moveset (model+2);
+    ``frame_path`` = the MHFU host PAC. Returns the port info dict.
+    """
+    from mhfu_model import port_p3rd as PORT
+    model = open(model_path, "rb").read()
+    frame = open(frame_path, "rb").read()
+    geo = open(geo_path, "rb").read() if geo_path else None
+    anim = open(anim_path, "rb").read() if anim_path else None
+    pac, info = PORT.port_monster(model, frame, geo_companion=geo, anim_blob=anim,
+                                  nb=nb, hops=hops)
+    with open(filepath, "wb") as f:
+        f.write(pac)
+    return info
+
+
 def inject_to_live(arm_obj, target_species=None, inject_dir=None):
     """Phase 4: push the edited monster to the running game (no on-disk edits).
 
