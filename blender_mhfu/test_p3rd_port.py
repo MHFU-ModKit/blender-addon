@@ -69,6 +69,25 @@ def run():
     else:
         print("[test] addon port == CLI port (byte-identical, %d B)" % len(got))
 
+    # 4. the SHIPPING configuration, not just the defaults. The Brute that gets
+    #    injected is skin="transfer"; this wrapper hardcoded "auto" until
+    #    2026-08-24, so a green parity test said nothing about the build in use.
+    ref_t, info_t = PORT.port_monster(open(model, "rb").read(), open(frame, "rb").read(),
+                                      geo_companion=open(geo, "rb").read(),
+                                      anim_blob=open(anim, "rb").read(),
+                                      skin="transfer")
+    out_t = out + ".transfer"
+    exporter.port_p3rd_monster_pac(model, frame, out_t, geo_path=geo,
+                                   anim_path=anim, skin="transfer")
+    got_t = open(out_t, "rb").read()
+    if got_t != ref_t:
+        errors.append("addon skin='transfer' output differs from CLI (%d vs %d B)"
+                      % (len(got_t), len(ref_t)))
+    else:
+        print("[test] addon skin='transfer' == CLI (byte-identical, %d B), "
+              "clips=%s slots=%s" % (len(got_t), info_t.get("anim_clips"),
+                                     info_t.get("anim", {}).get("slots")))
+
     if errors:
         for e in errors:
             print("FAIL:", e, file=sys.stderr)

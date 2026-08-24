@@ -432,7 +432,8 @@ def export_skinned_monster_pac(arm_obj, filepath, frame_pac=None,
 
 
 def port_p3rd_monster_pac(model_path, frame_path, filepath, geo_path=None,
-                          anim_path=None, nb=3, hops=1):
+                          anim_path=None, nb=3, hops=1, skin="auto",
+                          source_skeleton=False, ground_lift=0.0):
     """Port an MHP3rd big monster -> injectable MHFU PAC (the generalized port path).
 
     Wraps :func:`mhfu_model.port_p3rd.port_monster` so the Blender addon's
@@ -444,6 +445,13 @@ def port_p3rd_monster_pac(model_path, frame_path, filepath, geo_path=None,
     ``model_path`` = MHP3rd model+skel+TMH PAC; ``geo_path`` = its GE-list companion
     (model+1) when geometry is external; ``anim_path`` = its raw moveset (model+2);
     ``frame_path`` = the MHFU host PAC. Returns the port info dict.
+
+    ``skin`` / ``source_skeleton`` / ``ground_lift`` mirror
+    :func:`mhfu_model.port_p3rd.port_monster` and `tools/build_p3rd_port.py`. They are
+    not decoration: the SHIPPING Brute is ``skin="transfer"`` (closest-surface weight
+    transfer from the host's own native skinning), and until 2026-08-24 this wrapper
+    hardcoded the ``"auto"`` nearest-bone guess — so the addon could not reproduce the
+    build the CLI ships, which is exactly what an addon-vs-CLI parity test is for.
     """
     from mhfu_model import port_p3rd as PORT
     model = open(model_path, "rb").read()
@@ -451,7 +459,9 @@ def port_p3rd_monster_pac(model_path, frame_path, filepath, geo_path=None,
     geo = open(geo_path, "rb").read() if geo_path else None
     anim = open(anim_path, "rb").read() if anim_path else None
     pac, info = PORT.port_monster(model, frame, geo_companion=geo, anim_blob=anim,
-                                  nb=nb, hops=hops)
+                                  nb=nb, hops=hops, skin=skin,
+                                  source_skeleton=source_skeleton,
+                                  ground_lift=ground_lift)
     with open(filepath, "wb") as f:
         f.write(pac)
     return info
