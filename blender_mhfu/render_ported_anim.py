@@ -10,15 +10,20 @@ be injected.
 (Tigrex: 31 + 9 + 5, and the skeleton confirms the split at `bone+0x50`) back into
 whole-rig clips.
 
-⚠️ **NOT an oracle yet.** The body poses coherently now, but a cluster of parts —
-including the head — floats beside it, on the NATIVE clip too, so the fault is here
-and not in the PAC. Ruled out: the loc channels (only the hip carries a full triple;
-that is root motion), the anim-track → bone mapping (`bone+0x50` says 0..30 / 31..39 /
-40..44, matching the concatenation), and pose-relative rotation (fixed below — that
-was what made it explode outright). Still open: which geometry those parts belong to.
-`file_06185` is a split-mesh monster needing the `vg_rec` breadcrumb, so Blender
-vertex-group indices are NOT skeleton bone indices — a hide-by-bone-index filter hid
-the body and kept the strays. Start there.
+⚠️ **NOT an oracle yet — but the "cluster of parts floating beside it" now has a
+named cause (2026-08-27).** `importer._build_meshes` clamped every mesh group whose
+draw index exceeded the bone count onto the LAST bone
+(`bidx = min(g.index, n_bones - 1)`). `file_06185` has **214 groups against 48 bones**,
+so **166 of them** were welded to one bone — that is the floating cluster, and it is
+not the FK. The clamp is fixed for MHP3rd (per-record bind index), but MHFU PACs still
+parse with `mesh_record = -1`, so the fix does not reach them: they need the `vg_rec`
+breadcrumb, which is where to start.
+
+Ruled out along the way: the loc channels (only the hip carries a full triple; that is
+root motion), the anim-track → bone mapping (`bone+0x50` says 0..30 / 31..39 / 40..44,
+matching the concatenation), pose-relative rotation (fixed below — that is what made it
+explode outright, and `fk_bake.py` now bakes the same maths into Actions so every
+renderer gets it), and euler ORDER (all six give near-identical results).
 
     ./blender_mhfu/blender-docker.sh --background \
         --python blender_mhfu/render_ported_anim.py -- \
@@ -179,10 +184,11 @@ def _scene(arm):
     w.node_tree.nodes["Background"].inputs[1].default_value = 0.6
     bpy.context.scene.world = w
 
-    # ⚠️ EEVEE and Workbench both need a GL context, so in a headless container
-    # they die with "Unable to open a display" and a crash dump. CYCLES on CPU is
-    # the only engine that renders with no display at all — slower, but this is a
-    # handful of stills, not a movie.
+    # EEVEE and Workbench need a GL context. That used to mean CYCLES-on-CPU was the
+    # only option here, but `mhfu-blender:xvfb` (blender_mhfu/docker/) supplies a
+    # virtual display, so `MHFU_RENDER_ENGINE=BLENDER_WORKBENCH` now works and is
+    # ~100x faster. CYCLES stays the default only because this script renders a
+    # handful of stills, where the difference does not matter.
     scn = bpy.context.scene
     engine = os.environ.get("MHFU_RENDER_ENGINE", "CYCLES")
     scn.render.engine = engine
