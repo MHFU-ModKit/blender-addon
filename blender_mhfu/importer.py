@@ -129,6 +129,12 @@ def _build_meshes(model, skel, name, coll, arm_obj, materials=None):
     n_bones = len(skel.bones)
     materials = materials or []
     objs = []
+    # position of each group inside its own mesh record — see the bind-index note below
+    _local_index, _seen = {}, {}
+    for _g in model.mesh_groups:
+        k = _seen.get(_g.mesh_record, 0)
+        _local_index[(_g.mesh_record, _g.index)] = k
+        _seen[_g.mesh_record] = k + 1
     for g in model.mesh_groups:
         me = bpy.data.meshes.new("%s_grp%02d" % (name, g.index))
         verts = [conv(v["x"], v["y"], v["z"]) for v in g.vertices]
@@ -150,7 +156,21 @@ def _build_meshes(model, skel, name, coll, arm_obj, materials=None):
         obj = bpy.data.objects.new(me.name, me)
         coll.objects.link(obj)
         # rigid skin: full-weight this group to its bone via an Armature modifier
-        bidx = g.index if g.index < n_bones else n_bones - 1
+        #
+        # 🔴 DO NOT CLAMP TO THE LAST BONE. `bidx = min(g.index, n_bones - 1)` welded
+        # 43 of the Brute's 88 groups onto bone 45 — which sits in an auxiliary chain
+        # no clip animates — so nearly half the model stayed put while the rest moved.
+        # Invisible in rest pose, and it reads as "holes in his back" the moment
+        # anything plays. Draw order is only the bind index WITHIN a mesh record: no
+        # MHP3rd record holds more groups than there are bones (largest is 41 of 46),
+        # while the global index overflows for 42 of 88.
+        # ⚠️ MHFU PACs come out of the parser with mesh_record = -1 (records are not
+        # split there yet), so this changes nothing for them — they still need the
+        # `vg_rec` breadcrumb. Verified in range, NOT verified against the game.
+        bidx = g.index
+        if bidx >= n_bones:
+            local = _local_index.get((g.mesh_record, g.index))
+            bidx = local if local is not None and local < n_bones else n_bones - 1
         vg = obj.vertex_groups.new(name="bone_%d" % bidx)
         vg.add(range(len(verts)), 1.0, "REPLACE")
         obj.parent = arm_obj
