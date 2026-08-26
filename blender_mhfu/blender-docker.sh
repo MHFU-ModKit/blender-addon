@@ -18,7 +18,21 @@
 # Makefile hit).
 set -euo pipefail
 
-IMG="${MHFU_BLENDER_IMG:-nytimes/blender:latest}"
+# 🔴 `mhfu-blender:xvfb` = nytimes/blender + Xvfb (blender_mhfu/docker/Dockerfile,
+# `docker build -t mhfu-blender:xvfb blender_mhfu/docker`). Without a display
+# Blender's Workbench and EEVEE both die with "Unable to open a display", which
+# left CYCLES-on-CPU as the only usable engine — far too slow for a whole moveset.
+# Falls back to the stock image if the derived one was never built.
+IMG="${MHFU_BLENDER_IMG:-mhfu-blender:xvfb}"
+if ! docker image inspect "$IMG" >/dev/null 2>&1; then
+    IMG=nytimes/blender:latest
+fi
+# `blender-xvfb` (derived image only) starts Xvfb, then execs blender. NOT xvfb-run:
+# that hangs under a non-root uid, which is how this wrapper runs.
+LAUNCH=(blender)
+if [ "$IMG" != "nytimes/blender:latest" ]; then
+    LAUNCH=(blender-xvfb)
+fi
 here="$(cd "$(dirname "$0")" && pwd)"
 repo="$(cd "$here/.." && pwd)"
 
@@ -46,4 +60,4 @@ exec docker run --rm \
     "${envs[@]}" \
     "${mounts[@]}" \
     -w "$repo" \
-    "$IMG" blender "$@"
+    "$IMG" "${LAUNCH[@]}" "$@"

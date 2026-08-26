@@ -1,0 +1,10 @@
+#!/bin/sh
+# Start a virtual display, then hand off to Blender. Any argument list works.
+: "${MHFU_XVFB_SCREEN:=1280x1024x24}"
+Xvfb :99 -screen 0 "$MHFU_XVFB_SCREEN" -nolisten tcp -ac >/tmp/xvfb.log 2>&1 &
+# Wait for the socket rather than sleeping a fixed amount: a cold container can
+# take a second, and a fixed sleep either wastes time or races.
+i=0
+while [ ! -e /tmp/.X11-unix/X99 ] && [ $i -lt 100 ]; do i=$((i+1)); sleep 0.1; done
+export DISPLAY=:99
+exec blender "$@"

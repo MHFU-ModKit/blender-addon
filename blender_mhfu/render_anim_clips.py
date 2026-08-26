@@ -11,7 +11,11 @@ clear to recognize a move) and writes a labeling template CSV.
   outdir     default /tmp/brute_anim_clips
   only_slot  render just this one slot (for a quick pipeline test)
 
-Env: MHFU_CLIP_RES (e.g. 640x480), MHFU_CLIP_STEP (frame step, default 1).
+Also writes MHFU_CLIP_SHEET (default 4) PNG stills per clip as `still_<slot>_<k>.png`,
+which `tools/moveset_sheet.py` composes into one labelling contact sheet.
+
+Env: MHFU_CLIP_RES (e.g. 640x480), MHFU_CLIP_STEP (frame step, default 1),
+MHFU_CLIP_SHEET (stills per clip, 0 to disable).
 """
 import csv
 import glob
@@ -32,6 +36,8 @@ from mhfu_model import pmo_skin as _skin  # noqa: E402
 _argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUTDIR = _argv[0] if _argv else "/tmp/brute_anim_clips"
 ONLY = int(_argv[1]) if len(_argv) > 1 else None
+# PNG stills per clip for the contact sheet; 0 disables.
+SHEET = int(os.environ.get("MHFU_CLIP_SHEET", "4"))
 
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "workspace", "extracted_mhp3", "data_files"))
 MODEL = os.path.join(_ROOT, "file_05248.bin")
@@ -237,6 +243,20 @@ def render_clip(scn, arm, action, outdir):
     dst = os.path.join(outdir, "anim_%03d.mp4" % slot)
     if produced:
         os.replace(produced[0], dst)
+
+    # A few PNG stills alongside the video. Scrubbing 58 mp4s to find one move is
+    # slow; a contact sheet of the whole moveset is how you actually label it. The
+    # extra frames cost ~0.2 s on a 2.6 s clip because the scene is already set up.
+    if SHEET > 0:
+        fmt = scn.render.image_settings.file_format
+        scn.render.image_settings.file_format = "PNG"
+        lo, hi = int(fr[0]), int(fr[1])
+        span = max(1, hi - lo)
+        for k in range(SHEET):
+            scn.frame_set(lo + int(round(span * k / max(1, SHEET - 1))))
+            scn.render.filepath = os.path.join(outdir, "still_%03d_%d" % (slot, k))
+            bpy.ops.render.render(write_still=True)
+        scn.render.image_settings.file_format = fmt
     return slot, int(fr[1] - fr[0] + 1)
 
 
