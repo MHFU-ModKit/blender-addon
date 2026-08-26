@@ -40,10 +40,15 @@ repo="$(cd "$here/.." && pwd)"
 # value) silently forwards nothing here, so a `MHFU_ANIM_SHOTS=2 ./blender-docker.sh`
 # looked like it worked and rendered the default count instead.
 envs=()
-for v in MHFU_ANIM_CHANNELS MHFU_ANIM_SHOTS MHFU_ANIM_RES \
-         MHFU_RENDER_ENGINE MHFU_CYCLES_SAMPLES MHFU_ROT_MODE MHFU_CLIP_RES MHFU_CLIP_STEP; do
-    [ -n "${!v-}" ] && envs+=(-e "$v=${!v}")
-done
+# 🔴 Forward EVERY MHFU_* variable, not a hand-maintained list. The list was the
+# trap it was meant to document: MHFU_CLIP_REST was added to a script, was not in
+# the list, and the run silently rendered the normal output instead of honouring
+# the flag — which reads as the script ignoring you, not as a plumbing bug.
+while IFS='=' read -r name _; do
+    case "$name" in
+        MHFU_*) envs+=(-e "$name=${!name}") ;;
+    esac
+done < <(env)
 
 mounts=(-v "$repo":"$repo")
 for link in workspace tmp; do

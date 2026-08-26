@@ -32,6 +32,7 @@ import importer  # noqa: E402
 from mhfu_model import load_pac_p3rd  # noqa: E402
 from mhfu_model import convert as C  # noqa: E402
 from mhfu_model import pmo_skin as _skin  # noqa: E402
+import fk_bake  # noqa: E402
 
 _argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUTDIR = _argv[0] if _argv else "/tmp/brute_anim_clips"
@@ -279,9 +280,46 @@ def main():
         mm = load_pac_p3rd(MODEL, geo_path=GEO, anim_path=ANIM)
         proper_skin(arm, meshes, mm)
         strip_root_motion(mm)
+    # 🔴 REBAKE THE ACTIONS. The importer keys `pose_bone.rotation_euler` from the
+    # engine's channels, which are a different quantity (see fk_bake) — the result
+    # bends every extremity away while the rest pose is clean. MHFU_CLIP_RAW=1
+    # keeps the importer's version for comparison.
+    mm_full = load_pac_p3rd(MODEL, geo_path=GEO, anim_path=ANIM)
+    if not os.environ.get("MHFU_CLIP_RAW") and mm_full.anim and mm_full.skeleton:
+        want = mm_full.anim.animations
+        if ONLY is not None:
+            want = [a for a in want if a.slot == ONLY]
+        fk_bake.bake_all(arm, mm_full.skeleton, want,
+                         order=os.environ.get("MHFU_ROT_MODE", "XYZ"))
+
     center, size = setup_camera(meshes)
     scn = bpy.context.scene
     setup_render(scn)
+
+    # MHFU_CLIP_REST=1 renders ONE still with the armature in REST position and
+    # stops. Same camera, same skinning, same engine as the clips — which is the
+    # point: it separates "the mesh is wrong" from "the animation is wrong", and
+    # a bind pose rendered by a different script with different lighting cannot.
+    if os.environ.get("MHFU_CLIP_REST"):
+        arm.data.pose_position = "REST"
+        scn.render.image_settings.file_format = "PNG"
+        cam = scn.camera
+        # Orbit + a top-down. One three-quarter view cannot tell a hole in the mesh
+        # from a dark texture or a face pointing away, and "holes in his back" is
+        # exactly the claim that needs looking at from above.
+        import math
+        views = {"front": (0.0, -1.0, 0.25), "side": (1.0, 0.0, 0.25),
+                 "rear": (0.0, 1.0, 0.25), "top": (0.0, -0.001, 1.0),
+                 "under": (0.0, -0.001, -1.0), "three_quarter": (0.85, -1.0, 0.40)}
+        for name, d in views.items():
+            v = Vector(d).normalized()
+            cam.location = center + v * size * 1.7
+            cam.rotation_euler = (center - cam.location).normalized().to_track_quat(
+                "-Z", "Y").to_euler()
+            scn.render.filepath = os.path.join(OUTDIR, "rest_" + name)
+            bpy.ops.render.render(write_still=True)
+        print("RENDER wrote %d REST views -> %s" % (len(views), OUTDIR))
+        return
 
     acts = sorted(bpy.data.actions, key=_slot_of)
     if ONLY is not None:
