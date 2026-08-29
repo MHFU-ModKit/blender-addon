@@ -1,6 +1,7 @@
 """Render one MP4 per ported MHP3rd animation clip — a moveset catalog for labeling.
 
-Imports the MHP3rd Brute PAC (model file_05248 + GE file_05249 + moveset file_05250)
+Imports an MHP3rd monster PAC (model file_N + GE file_N+1 + moveset file_N+2; N from
+MHFU_CLIP_MON, default 5248 = the Brute. Zinogre = 5339)
 with the addon importer, which builds one Blender Action per clip named `anim_<slot>`.
 Renders each clip to <outdir>/anim_<slot>.mp4 (Workbench, textured — fast and plenty
 clear to recognize a move) and writes a labeling template CSV.
@@ -41,9 +42,13 @@ ONLY = int(_argv[1]) if len(_argv) > 1 else None
 SHEET = int(os.environ.get("MHFU_CLIP_SHEET", "4"))
 
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "workspace", "extracted_mhp3", "data_files"))
-MODEL = os.path.join(_ROOT, "file_05248.bin")
-GEO = os.path.join(_ROOT, "file_05249.bin")
-ANIM = os.path.join(_ROOT, "file_05250.bin")
+# Monster PACs run in 5-file groups, so model N => geometry N+1, moveset N+2.
+# MHFU_CLIP_MON is that base id; the Brute (05248) stays the default so every
+# existing invocation is unchanged. Zinogre = 5339.
+_MON = int(os.environ.get("MHFU_CLIP_MON", "5248"))
+MODEL = os.environ.get("MHFU_CLIP_MODEL") or os.path.join(_ROOT, "file_%05d.bin" % _MON)
+GEO = os.environ.get("MHFU_CLIP_GEO") or os.path.join(_ROOT, "file_%05d.bin" % (_MON + 1))
+ANIM = os.environ.get("MHFU_CLIP_ANIM") or os.path.join(_ROOT, "file_%05d.bin" % (_MON + 2))
 
 _res = os.environ.get("MHFU_CLIP_RES", "640x480").split("x")
 RES = (int(_res[0]), int(_res[1]))
