@@ -38,10 +38,23 @@ from mhfu_model import convert as C
 ENG2BL = Matrix(((1, 0, 0, 0), (0, 0, -1, 0), (0, 1, 0, 0), (0, 0, 0, 1)))
 
 
-def sample(anim):
-    """joint -> {kind: {axis: [(frame, value), ...]}}, sorted for interpolation."""
+def sample(anim, bone_of_record=None):
+    """joint -> {kind: {axis: [(frame, value), ...]}}, sorted for interpolation.
+
+    🔴 `bone_of_record` is NOT optional for an MHP3rd SOURCE clip. MHP3rd stores
+    ``skeleton_bone = record + bone_offset + skipped_so_far`` — record N does not
+    drive joint N — so reading a P3rd moveset positionally puts the thigh's curve
+    on the shin and leaves the tail frozen at bind pose. Pass the map from
+    `mhfu_model.p3rd_anim_map.for_monster()`. MHFU's own flat clips ARE positional
+    (verified on native file_06185: track i == joint i), so None is right for a
+    built PAC — and only for a built PAC.
+    """
     out = {}
     for j, tr in enumerate(anim.tracks):
+        if bone_of_record is not None:
+            j = bone_of_record.get(j)
+            if j is None:
+                continue
         per = out.setdefault(j, {"rot": {}, "loc": {}})
         for ch in tr.channels:
             kind, axis = C.channel_kind(ch.type)
@@ -118,9 +131,9 @@ def _desired_poses(skel, samples, frame, heads, order):
     return out
 
 
-def bake_action(arm, skel, anim, name, heads, order="XYZ"):
+def bake_action(arm, skel, anim, name, heads, order="XYZ", bone_of_record=None):
     """Build one Blender Action for `anim`. Returns it (or None if empty)."""
-    samples = sample(anim)
+    samples = sample(anim, bone_of_record)
     frames = key_frames(samples)
     if len(frames) < 2:
         return None
@@ -170,7 +183,7 @@ def bake_action(arm, skel, anim, name, heads, order="XYZ"):
     return action
 
 
-def bake_all(arm, skel, anims, order="XYZ", log=print):
+def bake_all(arm, skel, anims, order="XYZ", log=print, bone_of_record=None):
     """Replace every Action on `arm` with a correctly-baked one."""
     for a in list(bpy.data.actions):
         bpy.data.actions.remove(a)
@@ -180,8 +193,11 @@ def bake_all(arm, skel, anims, order="XYZ", log=print):
     arm.animation_data_create()
     made = 0
     for anim in anims:
-        act = bake_action(arm, skel, anim, "anim_%03d" % anim.slot, heads, order)
+        act = bake_action(arm, skel, anim, "anim_%03d" % anim.slot, heads, order,
+                          bone_of_record)
         if act is not None:
             made += 1
-    log("[fk_bake] baked %d/%d clips (order=%s)" % (made, len(anims), order))
+    log("[fk_bake] baked %d/%d clips (order=%s, record->bone map=%s)"
+        % (made, len(anims), order,
+           "positional" if bone_of_record is None else "%d records" % len(bone_of_record)))
     return made

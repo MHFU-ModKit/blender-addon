@@ -155,24 +155,37 @@ def _build_meshes(model, skel, name, coll, arm_obj, materials=None):
             me.materials.append(materials[mi])
         obj = bpy.data.objects.new(me.name, me)
         coll.objects.link(obj)
-        # rigid skin: full-weight this group to its bone via an Armature modifier
-        #
-        # 🔴 DO NOT CLAMP TO THE LAST BONE. `bidx = min(g.index, n_bones - 1)` welded
-        # 43 of the Brute's 88 groups onto bone 45 — which sits in an auxiliary chain
-        # no clip animates — so nearly half the model stayed put while the rest moved.
-        # Invisible in rest pose, and it reads as "holes in his back" the moment
-        # anything plays. Draw order is only the bind index WITHIN a mesh record: no
-        # MHP3rd record holds more groups than there are bones (largest is 41 of 46),
-        # while the global index overflows for 42 of 88.
-        # ⚠️ MHFU PACs come out of the parser with mesh_record = -1 (records are not
-        # split there yet), so this changes nothing for them — they still need the
-        # `vg_rec` breadcrumb. Verified in range, NOT verified against the game.
-        bidx = g.index
-        if bidx >= n_bones:
-            local = _local_index.get((g.mesh_record, g.index))
-            bidx = local if local is not None and local < n_bones else n_bones - 1
-        vg = obj.vertex_groups.new(name="bone_%d" % bidx)
-        vg.add(range(len(verts)), 1.0, "REPLACE")
+        # ✅ AUTHENTIC SKIN FIRST. Every vertex the parser could resolve carries
+        # `influences` = the file's own [(bone, weight)] list, read out of the PMO
+        # bone palette (`pmo._attach_influences` / `pmo_p3rd.parse`). Using it is
+        # what makes an offline render comparable to the game at all — the rigid
+        # draw-order fallback below is a guess, and for file_06185 it is a guess
+        # that welds 166 of 214 groups onto one bone.
+        _pergroup: dict = {}
+        for vi, v in enumerate(g.vertices):
+            for b, w in (v.get("influences") or ()):
+                if w > 1e-4 and 0 <= b < n_bones:
+                    _pergroup.setdefault(b, []).append((vi, w))
+        if _pergroup:
+            for b in sorted(_pergroup):
+                vg = obj.vertex_groups.new(name="bone_%d" % b)
+                for vi, w in _pergroup[b]:
+                    vg.add([vi], w, "REPLACE")
+        else:
+            # rigid fallback: full-weight this group to its draw-order bone.
+            #
+            # 🔴 DO NOT CLAMP TO THE LAST BONE. `bidx = min(g.index, n_bones - 1)`
+            # welded 43 of the Brute's 88 groups onto bone 45 — which sits in an
+            # auxiliary chain no clip animates — so nearly half the model stayed put
+            # while the rest moved. Invisible in rest pose, and it reads as "holes in
+            # his back" the moment anything plays. Draw order is only the bind index
+            # WITHIN a mesh record.
+            bidx = g.index
+            if bidx >= n_bones:
+                local = _local_index.get((g.mesh_record, g.index))
+                bidx = local if local is not None and local < n_bones else n_bones - 1
+            vg = obj.vertex_groups.new(name="bone_%d" % bidx)
+            vg.add(range(len(verts)), 1.0, "REPLACE")
         obj.parent = arm_obj
         mod = obj.modifiers.new("Armature", "ARMATURE")
         mod.object = arm_obj

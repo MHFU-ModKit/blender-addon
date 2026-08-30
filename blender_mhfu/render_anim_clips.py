@@ -34,6 +34,7 @@ from mhfu_model import load_pac_p3rd  # noqa: E402
 from mhfu_model import convert as C  # noqa: E402
 from mhfu_model import pmo_skin as _skin  # noqa: E402
 import fk_bake  # noqa: E402
+from mhfu_model import p3rd_anim_map as _p3am  # noqa: E402
 
 _argv = sys.argv[sys.argv.index("--") + 1:] if "--" in sys.argv else []
 OUTDIR = _argv[0] if _argv else "/tmp/brute_anim_clips"
@@ -294,8 +295,25 @@ def main():
         want = mm_full.anim.animations
         if ONLY is not None:
             want = [a for a in want if a.slot == ONLY]
+        # 🔴 An MHP3rd record does NOT drive the joint with the same index. Without
+        # this map the moveset is read onto the wrong bones: the tail gets nothing
+        # and freezes at bind pose while the skin spanning it stretches, and every
+        # limb curve lands one joint off. MHFU_CLIP_EM overrides the lookup;
+        # MHFU_CLIP_POSITIONAL=1 restores the old (wrong) behaviour for comparison.
+        b2r = None
+        if not os.environ.get("MHFU_CLIP_POSITIONAL"):
+            em = int(os.environ.get("MHFU_CLIP_EM") or _p3am.em_for_model_pac(_MON))
+            nrec = max((len(a.tracks) for a in want), default=0)
+            nb = len(mm_full.skeleton.bones)
+            b2r = _p3am.for_monster(em, nrec, nb)
+            r2b = {r: b for b, r in b2r.items()}
+            print("[clips] em%03d: %d records -> joints %d..%d of %d (offset=%s)"
+                  % (em, nrec, min(r2b.values()), max(r2b.values()), nb,
+                     _p3am.BONE_OFFSET.get(em, _p3am.DEFAULT_BONE_OFFSET)))
+            b2r = r2b
         fk_bake.bake_all(arm, mm_full.skeleton, want,
-                         order=os.environ.get("MHFU_ROT_MODE", "XYZ"))
+                         order=os.environ.get("MHFU_ROT_MODE", "XYZ"),
+                         bone_of_record=b2r)
 
     center, size = setup_camera(meshes)
     scn = bpy.context.scene
