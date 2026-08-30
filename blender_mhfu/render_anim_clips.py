@@ -41,6 +41,7 @@ OUTDIR = _argv[0] if _argv else "/tmp/brute_anim_clips"
 ONLY = int(_argv[1]) if len(_argv) > 1 else None
 # PNG stills per clip for the contact sheet; 0 disables.
 SHEET = int(os.environ.get("MHFU_CLIP_SHEET", "4"))
+TRAVEL: dict = {}                      # slot -> (net, peak) root displacement
 
 _ROOT = os.path.abspath(os.path.join(_HERE, "..", "workspace", "extracted_mhp3", "data_files"))
 # Monster PACs run in 5-file groups, so model N => geometry N+1, moveset N+2.
@@ -51,8 +52,16 @@ MODEL = os.environ.get("MHFU_CLIP_MODEL") or os.path.join(_ROOT, "file_%05d.bin"
 GEO = os.environ.get("MHFU_CLIP_GEO") or os.path.join(_ROOT, "file_%05d.bin" % (_MON + 1))
 ANIM = os.environ.get("MHFU_CLIP_ANIM") or os.path.join(_ROOT, "file_%05d.bin" % (_MON + 2))
 
+# 🔴 STILLS and VIDEO are sized separately, because they are ~94% / ~6% of the cost
+# and only one of them is read closely. A clip is ~200 video frames against 12
+# stills, so the video sets the wall-clock while the CONTACT SHEET — built from the
+# stills — is what a labelling pass actually reads. Rendering both at sheet
+# resolution turned a 30-minute job into a 3-hour one for no legibility gained.
+# MHFU_CLIP_RES sizes the stills; MHFU_CLIP_VIDEO_RES sizes the mp4 (default: same).
 _res = os.environ.get("MHFU_CLIP_RES", "640x480").split("x")
 RES = (int(_res[0]), int(_res[1]))
+_vres = os.environ.get("MHFU_CLIP_VIDEO_RES", "").split("x")
+VRES = (int(_vres[0]), int(_vres[1])) if len(_vres) == 2 else RES
 STEP = int(os.environ.get("MHFU_CLIP_STEP", "1"))
 FPS = 30
 
@@ -174,6 +183,36 @@ def proper_skin(arm, meshes, mm):
                 g.add([vi], float(w), "ADD")
 
 
+def root_travel(skel, anim, b2r):
+    """(net, peak) distance the ROOT joint travels over the clip, in engine units.
+
+    `strip_root_motion` deletes exactly this so the clip plays in place and stays in
+    frame — but locomotion is half of what a move IS. A forward lunge and a standing
+    bite look alike once the travel is gone, so measure it before removing it and put
+    it in the index: 0 = in place, ~1000 = about one body length.
+    """
+    s = fk_bake.sample(anim, b2r)
+    n = len(skel.bones)
+    roots = [b.index for b in skel.bones if not (0 <= b.parent < n)]
+    frames = fk_bake.key_frames(s)
+    path = []
+    for f in frames:
+        v = Vector((0, 0, 0))
+        for r in roots:
+            per = s.get(r)
+            if not per or not per["loc"]:
+                continue
+            b = next(x for x in skel.bones if x.index == r)
+            v += Vector([fk_bake.at(per["loc"].get(a, []), f, b.bind_pos[a])
+                         for a in (0, 1, 2)])
+        path.append(v)
+    if not path:
+        return 0.0, 0.0
+    net = (path[-1] - path[0]).length
+    peak = max((v - path[0]).length for v in path)
+    return net, peak
+
+
 def strip_root_motion(mm):
     """Remove world-translation channels on the root bone(s) so each clip plays
     IN PLACE (locomotion stays centred in frame instead of walking out of view).
@@ -187,7 +226,8 @@ def strip_root_motion(mm):
                 act.fcurves.remove(fc)
 
 
-def setup_camera(meshes):
+def bind_bounds(meshes):
+    """World bbox of the meshes at BIND pose."""
     lo = Vector((1e9, 1e9, 1e9))
     hi = Vector((-1e9, -1e9, -1e9))
     for o in meshes:
@@ -195,6 +235,44 @@ def setup_camera(meshes):
             w = o.matrix_world @ v.co
             lo = Vector(map(min, lo, w))
             hi = Vector(map(max, hi, w))
+    return lo, hi
+
+
+def moveset_bounds(arm, meshes, acts, per_clip=5):
+    """World bbox of the DEFORMED mesh sampled across the WHOLE moveset.
+
+    🔴 Framing on the bind pose is not good enough. The camera is fixed for the
+    whole render, and a clip that rears, lunges or hops puts the monster outside a
+    bind-pose frame — it renders CROPPED, and a cropped frame is unlabelable in a
+    way `moveset_sheet.union_bbox` cannot undo (it crops, it cannot un-clip). Since
+    the frame is shared, the bbox has to be too: sample every clip, union the lot.
+    """
+    dg = bpy.context.evaluated_depsgraph_get()
+    scn = bpy.context.scene
+    lo, hi = bind_bounds(meshes)
+    prev = arm.animation_data.action if arm.animation_data else None
+    for a in acts:
+        arm.animation_data.action = a
+        f0, f1 = a.frame_range
+        for k in range(per_clip):
+            scn.frame_set(int(round(f0 + (f1 - f0) * k / max(1, per_clip - 1))))
+            dg.update()
+            for o in meshes:
+                oe = o.evaluated_get(dg)
+                mw = oe.matrix_world
+                for c in oe.bound_box:
+                    w = mw @ Vector(c)
+                    lo = Vector(map(min, lo, w))
+                    hi = Vector(map(max, hi, w))
+    if arm.animation_data:
+        arm.animation_data.action = prev
+    return lo, hi
+
+
+CAMS: list = []                        # [(still-prefix, camera object)]
+
+
+def setup_camera(lo, hi):
     center = (lo + hi) * 0.5
     size = (hi - lo).length or 1.0
 
@@ -203,10 +281,25 @@ def setup_camera(meshes):
     cam_data.clip_end = size * 40.0
     cam = bpy.data.objects.new("cam", cam_data)
     bpy.context.scene.collection.objects.link(cam)
-    # 3/4 front, pulled back generously so root motion stays roughly in frame
-    cam.location = center + Vector((0.85, -1.0, 0.40)).normalized() * size * 1.7
+    # 3/4 front. `size` is the diagonal of the bbox the caller passed, so 1.05x
+    # already clears the whole moveset — the old 1.7x was slack bought to survive a
+    # bind-pose bbox that under-reported the animated extent.
+    cam.location = center + Vector((0.85, -1.0, 0.40)).normalized() * size * 1.05
     cam.rotation_euler = (center - cam.location).normalized().to_track_quat("-Z", "Y").to_euler()
     bpy.context.scene.camera = cam
+    CAMS.append(("still", cam))
+
+    # ⚠️ A SECOND, SIDE camera. These monsters are long, and a 3/4-front view
+    # foreshortens the whole body onto a few pixels — a tail sweep and a body slam
+    # look alike from there, which is precisely the distinction a labelling pass has
+    # to make. One extra still costs ~0.2 s because the scene is already built.
+    side_data = bpy.data.cameras.new("cam_side")
+    side_data.clip_start, side_data.clip_end = cam_data.clip_start, cam_data.clip_end
+    side = bpy.data.objects.new("cam_side", side_data)
+    bpy.context.scene.collection.objects.link(side)
+    side.location = center + Vector((1.0, 0.0, 0.18)).normalized() * size * 1.05
+    side.rotation_euler = (center - side.location).normalized().to_track_quat("-Z", "Y").to_euler()
+    CAMS.append(("side", side))
 
     world = bpy.data.worlds.new("w")
     world.use_nodes = True
@@ -244,6 +337,7 @@ def render_clip(scn, arm, action, outdir):
     for stale in glob.glob(os.path.join(outdir, ".tmp_clip*")):
         os.remove(stale)
     scn.render.filepath = os.path.join(outdir, ".tmp_clip")
+    scn.render.resolution_x, scn.render.resolution_y = VRES
     bpy.ops.render.render(animation=True)
     slot = _slot_of(action)
     produced = sorted(glob.glob(os.path.join(outdir, ".tmp_clip*")))
@@ -259,10 +353,16 @@ def render_clip(scn, arm, action, outdir):
         scn.render.image_settings.file_format = "PNG"
         lo, hi = int(fr[0]), int(fr[1])
         span = max(1, hi - lo)
-        for k in range(SHEET):
-            scn.frame_set(lo + int(round(span * k / max(1, SHEET - 1))))
-            scn.render.filepath = os.path.join(outdir, "still_%03d_%d" % (slot, k))
-            bpy.ops.render.render(write_still=True)
+        scn.render.resolution_x, scn.render.resolution_y = RES
+        main_cam = scn.camera
+        for prefix, cam in (CAMS or [("still", main_cam)]):
+            scn.camera = cam
+            for k in range(SHEET):
+                scn.frame_set(lo + int(round(span * k / max(1, SHEET - 1))))
+                scn.render.filepath = os.path.join(
+                    outdir, "%s_%03d_%d" % (prefix, slot, k))
+                bpy.ops.render.render(write_still=True)
+        scn.camera = main_cam
         scn.render.image_settings.file_format = fmt
     return slot, int(fr[1] - fr[0] + 1)
 
@@ -277,15 +377,29 @@ def main():
     if not meshes:
         raise RuntimeError("no meshes imported")
 
-    skin = os.environ.get("MHFU_CLIP_SKIN", "auto")
+    # 🔴 DEFAULT = "native": keep the weights the IMPORTER resolved, which since
+    # `pmo_p3rd.parse` / `pmo._attach_influences` are the PMO's OWN bone palette.
+    # Every other mode here THROWS THOSE AWAY and re-guesses, and a guess is the
+    # bottom rung of the skinning ladder (transfer > source weights > auto_skin).
+    # That mattered invisibly until 2026-08-30: the rest pose is clean under ANY
+    # skinning — every bone is at bind — so the guess only shows once a clip plays.
+    # On the Zinogre (181 groups / 51 bones) `auto_skin` collapsed him into an
+    # unreadable ball in every frame of every clip, which reads exactly like "the
+    # port is still deformed" and is nothing of the kind: his FK is sane and the
+    # built PAC renders clean under render_port_views. `auto` was the right default
+    # only while the importer's own skin was the 166-of-214 weld it no longer is.
+    skin = os.environ.get("MHFU_CLIP_SKIN", "native")
     if skin == "blend":
         blend_skin(arm, meshes)
     elif skin == "rigid":
         rebind_nearest_bone(arm, meshes)
-    else:                                   # default: porter's tested anti-tear auto_skin
+    elif skin == "auto":
         mm = load_pac_p3rd(MODEL, geo_path=GEO, anim_path=ANIM)
         proper_skin(arm, meshes, mm)
-        strip_root_motion(mm)
+    else:                                   # native: the file's own palette
+        nvg = sum(len(o.vertex_groups) for o in meshes)
+        print("[clips] skin=native: keeping the PMO's own palette (%d vertex groups "
+              "over %d objects)" % (nvg, len(meshes)))
     # 🔴 REBAKE THE ACTIONS. The importer keys `pose_bone.rotation_euler` from the
     # engine's channels, which are a different quantity (see fk_bake) — the result
     # bends every extremity away while the rest pose is clean. MHFU_CLIP_RAW=1
@@ -314,9 +428,25 @@ def main():
         fk_bake.bake_all(arm, mm_full.skeleton, want,
                          order=os.environ.get("MHFU_ROT_MODE", "XYZ"),
                          bone_of_record=b2r)
+        # 🔴 AFTER the bake, never before. `bake_all` deletes every Action and
+        # rebuilds it, so a strip that ran earlier is silently undone. It only
+        # SHOWED on a monster whose loc records reach the root: the Zinogre at
+        # offset 0 keys bone_0.location, the camera is framed on the bind pose,
+        # and the clip walks him out of frame — which reads as "the port is
+        # still broken". The Brute at offset 2 keys no root, so the control
+        # never caught it.
+        TRAVEL.update({a.slot: root_travel(mm_full.skeleton, a, b2r) for a in want})
+        strip_root_motion(mm_full)
 
-    center, size = setup_camera(meshes)
     scn = bpy.context.scene
+    _acts = sorted(bpy.data.actions, key=_slot_of)
+    if ONLY is not None:
+        _acts = [a for a in _acts if _slot_of(a) == ONLY]
+    if _acts and not os.environ.get("MHFU_CLIP_REST"):
+        _lo, _hi = moveset_bounds(arm, meshes, _acts)
+    else:
+        _lo, _hi = bind_bounds(meshes)
+    center, size = setup_camera(_lo, _hi)
     setup_render(scn)
 
     # MHFU_CLIP_REST=1 renders ONE still with the armature in REST position and
@@ -344,9 +474,7 @@ def main():
         print("RENDER wrote %d REST views -> %s" % (len(views), OUTDIR))
         return
 
-    acts = sorted(bpy.data.actions, key=_slot_of)
-    if ONLY is not None:
-        acts = [a for a in acts if _slot_of(a) == ONLY]
+    acts = _acts
     print("RENDER %d clip(s) -> %s (res=%dx%d step=%d)" % (len(acts), OUTDIR, RES[0], RES[1], STEP))
 
     rows = []
@@ -361,9 +489,12 @@ def main():
         idx = os.path.join(OUTDIR, "_moveset_index.csv")
         with open(idx, "w", newline="") as fh:
             w = csv.writer(fh)
-            w.writerow(["anim_id", "clip_file", "frames", "seconds", "label", "notes"])
+            w.writerow(["anim_id", "clip_file", "frames", "seconds",
+                        "travels_net", "travels_peak", "label", "notes"])
             for slot, nframes, secs in rows:
-                w.writerow(["anim_%03d" % slot, "anim_%03d.mp4" % slot, nframes, secs, "", ""])
+                net, peak = TRAVEL.get(slot, (0.0, 0.0))
+                w.writerow(["anim_%03d" % slot, "anim_%03d.mp4" % slot, nframes, secs,
+                            round(net), round(peak), "", ""])
         print("RENDER wrote index %s (%d clips)" % (idx, len(rows)))
 
 
