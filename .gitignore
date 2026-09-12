@@ -1,0 +1,9 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Game files are never committed — your own dump lives here
+workspace/
+
+.DS_Store
