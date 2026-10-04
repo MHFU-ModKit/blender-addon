@@ -4,6 +4,8 @@
 
 # MHFU ModKit — Blender addon
 
+> **Archived.** This code now lives in [MHFU-ModKit/modkit](https://github.com/MHFU-ModKit/modkit), at [`apps/blender`](https://github.com/MHFU-ModKit/modkit/tree/main/apps/blender). Open issues and pull requests there.
+
 Imports a Monster Hunter Freedom Unite big-monster model PAC into Blender as an armature,
 skinned meshes and animations, and **exports edits back to an engine-valid PAC** through the
 constraint validator — or pushes them to the running game. Thin `bpy` glue over the
